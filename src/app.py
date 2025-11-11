@@ -3,8 +3,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flask import Flask, render_template, abort, request, redirect, url_for
-import asyncio
-from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import datetime
 import re
@@ -341,25 +339,6 @@ async def _fetch_nowgoal_html(path: str | None = None, filter_state: int | None 
 
     if html_content:
         return html_content
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(4000)
-                if filter_state is not None:
-                    try:
-                        await page.evaluate("(state) => { if (typeof HideByState === 'function') { HideByState(state); } }", filter_state)
-                        await page.wait_for_timeout(1500)
-                    except Exception as eval_err:
-                        print(f"Advertencia al aplicar HideByState({filter_state}) en {target_url}: {eval_err}")
-                return await page.content()
-            finally:
-                await browser.close()
-    except Exception as browser_exc:
-        print(f"Error al obtener la pagina con Playwright ({target_url}): {browser_exc}")
     return None
 
 def _parse_number_clean(s: str):
