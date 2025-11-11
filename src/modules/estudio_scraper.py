@@ -11,16 +11,9 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # --- CONFIGURACIÓN GLOBAL ---
 BASE_URL_OF = "https://live18.nowgoal25.com"
-SELENIUM_TIMEOUT_SECONDS_OF = 10
 PLACEHOLDER_NODATA = "*(No disponible)*"
 REQUEST_TIMEOUT_SECONDS = 10
 REQUEST_HEADERS = {
@@ -43,9 +36,6 @@ _stats_cache_lock = threading.Lock()
 _analysis_cache = {}
 _analysis_cache_lock = threading.Lock()
 _STATS_NOT_FOUND = object()
-_driver_instance = None
-_driver_instance_lock = threading.Lock()
-_driver_use_lock = threading.Lock()
 
 def _read_cache(cache_dict, key, ttl_seconds, lock):
     with lock:
@@ -418,43 +408,53 @@ def get_rival_b_for_original_h2h_of(soup, league_id=None):
                 return key_id, rival_id_match.group(1), rival_tag.text.strip()
     return None, None, None
 
-def get_h2h_details_for_original_logic_of(driver, key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
-    if not all([driver, key_match_id, rival_a_id, rival_b_id]):
+def get_h2h_details_for_original_logic_of(session, key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
+    if not all([session, key_match_id, rival_a_id, rival_b_id]):
         return {"status": "error", "resultado": "N/A (Datos incompletos para H2H)"}
+
     url = f"{BASE_URL_OF}/match/h2h-{key_match_id}"
+
     try:
-        driver.get(url)
-        WebDriverWait(driver, SELENIUM_TIMEOUT_SECONDS_OF).until(EC.presence_of_element_located((By.ID, "table_v2")))
-        try:
-            select = Select(WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "hSelect_2"))))
-            select.select_by_value("8")
-            time.sleep(0.5)
-        except TimeoutException: pass
-        soup = BeautifulSoup(driver.page_source, "lxml")
-    except Exception as e:
-        return {"status": "error", "resultado": f"N/A (Error Selenium en H2H Col3: {type(e).__name__})"}
+        # Aquí asumimos que la tabla ya contiene los datos necesarios sin interacciones JS complejas.
+        # En el futuro, se podría investigar si hay una API que devuelva estos datos.
+        response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "lxml")
+    except requests.RequestException as e:
+        return {"status": "error", "resultado": f"N/A (Error de red en H2H Col3: {e})"}
+
     if not (table := soup.find("table", id="table_v2")):
         return {"status": "error", "resultado": "N/A (Tabla H2H Col3 no encontrada)"}
+
     for row in table.find_all("tr", id=re.compile(r"tr2_\d+")):
         links = row.find_all("a", onclick=True)
         if len(links) < 2: continue
-        h_id_m = re.search(r"team\((\d+)\)", links[0].get("onclick", "")); a_id_m = re.search(r"team\((\d+)\)", links[1].get("onclick", ""))
+
+        h_id_m = re.search(r"team\((\d+)\)", links[0].get("onclick", ""));
+        a_id_m = re.search(r"team\((\d+)\)", links[1].get("onclick", ""))
+
         if not (h_id_m and a_id_m): continue
+
         h_id, a_id = h_id_m.group(1), a_id_m.group(1)
+
         if {h_id, a_id} == {str(rival_a_id), str(rival_b_id)}:
             if not (score_span := row.find("span", class_="fscore_2")) or "-" not in score_span.text: continue
+
             score = score_span.text.strip().split("(")[0].strip()
             g_h, g_a = score.split("-", 1)
             tds = row.find_all("td")
             handicap_raw = "N/A"
+
             if len(tds) > 11:
                 cell = tds[11]
                 handicap_raw = (cell.get("data-o") or cell.text).strip() or "N/A"
+
             return {
                 "status": "found", "goles_home": g_h.strip(), "goles_away": g_a.strip(),
                 "handicap": handicap_raw, "match_id": row.get('index'),
                 "h2h_home_team_name": links[0].text.strip(), "h2h_away_team_name": links[1].text.strip()
             }
+
     return {"status": "not_found", "resultado": f"H2H directo no encontrado para {rival_a_name} vs {rival_b_name}."}
 
 def get_team_league_info_from_script_of(soup):
@@ -635,69 +635,22 @@ def extract_comparative_match_of(soup, table_id, main_team, opponent, league_id,
     return None
 
 
-def _load_main_match_soup(driver, main_match_id: str):
+def _load_main_match_soup(session, main_match_id: str):
+    """
+    Carga y parsea la página principal de un partido usando requests.
+    """
     main_page_url = f"{BASE_URL_OF}/match/h2h-{main_match_id}"
-    driver.get(main_page_url)
-    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "table_v1")))
-    for select_id in ["hSelect_1", "hSelect_2", "hSelect_3"]:
-        try:
-            Select(WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.ID, select_id)))).select_by_value("8")
-            time.sleep(0.1)
-        except TimeoutException:
-            continue
-    return BeautifulSoup(driver.page_source, "lxml")
 
-
-def _build_selenium_options():
-    options = ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-logging")
-    options.add_argument("--log-level=3")
-    options.add_argument("--blink-settings=imagesEnabled=false")
-    options.add_argument(f"user-agent={REQUEST_HEADERS['User-Agent']}")
-    return options
-
-
-def _reset_selenium_driver():
-    global _driver_instance
-    with _driver_instance_lock:
-        if _driver_instance is not None:
-            try:
-                _driver_instance.quit()
-            except Exception:
-                pass
-            _driver_instance = None
-
-
-def _get_or_create_selenium_driver():
-    global _driver_instance
-    with _driver_instance_lock:
-        if _driver_instance is None:
-            try:
-                _driver_instance = webdriver.Chrome(options=_build_selenium_options())
-            except WebDriverException as exc:
-                print(f"Error inicializando Selenium driver: {exc}")
-                _driver_instance = None
-        return _driver_instance
-
-
-@contextmanager
-def managed_selenium_driver():
-    driver = _get_or_create_selenium_driver()
-    if not driver:
-        yield None
-        return
-    with _driver_use_lock:
-        try:
-            yield driver
-        except WebDriverException:
-            _reset_selenium_driver()
-            raise
+    try:
+        response = session.get(main_page_url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        # Aquí se asume que la información principal está en el HTML inicial.
+        # Las interacciones de JS para cambiar filtros no se pueden replicar fácilmente
+        # sin analizar las llamadas de red que hace la página.
+        return BeautifulSoup(response.text, "lxml")
+    except requests.RequestException as e:
+        print(f"Error al cargar la página del partido {main_match_id}: {e}")
+        return None
 
 def analizar_partido_completo(match_id: str):
     main_match_id = "".join(filter(str.isdigit, str(match_id)))
@@ -709,28 +662,31 @@ def analizar_partido_completo(match_id: str):
         return cached_payload
 
     start_time = time.time()
+    session = get_requests_session_of()
+
     try:
-        with managed_selenium_driver() as driver:
-            if not driver:
-                return {"error": "No se pudo inicializar el WebDriver."}
-            soup_completo = _load_main_match_soup(driver, main_match_id)
-            home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
-            home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
-            away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
-            home_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'home')
-            away_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'away')
-            key_match_id_rival_a, rival_a_id, rival_a_name = get_rival_a_for_original_h2h_of(soup_completo, league_id)
-            _, rival_b_id, rival_b_name = get_rival_b_for_original_h2h_of(soup_completo, league_id)
-            last_home_match = extract_last_match_in_league_of(soup_completo, "table_v1", home_name, league_id, True)
-            last_away_match = extract_last_match_in_league_of(soup_completo, "table_v2", away_name, league_id, False)
-            h2h_data = extract_h2h_data_of(soup_completo, home_name, away_name, None)
-            comp_L_vs_UV_A = extract_comparative_match_of(soup_completo, "table_v1", home_name, (last_away_match or {}).get('home_team'), league_id, True)
-            comp_V_vs_UL_H = extract_comparative_match_of(soup_completo, "table_v2", away_name, (last_home_match or {}).get('away_team'), league_id, False)
-            main_match_odds_data = extract_bet365_initial_odds_of(soup_completo)
-            final_score, _ = extract_final_score_of(soup_completo)
-            details_h2h_col3 = get_h2h_details_for_original_logic_of(
-                driver, key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
-            )
+        soup_completo = _load_main_match_soup(session, main_match_id)
+        if soup_completo is None:
+            return {"error": "No se pudo cargar la página del partido."}
+
+        home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
+        home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
+        away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
+        home_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'home')
+        away_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'away')
+        key_match_id_rival_a, rival_a_id, rival_a_name = get_rival_a_for_original_h2h_of(soup_completo, league_id)
+        _, rival_b_id, rival_b_name = get_rival_b_for_original_h2h_of(soup_completo, league_id)
+        last_home_match = extract_last_match_in_league_of(soup_completo, "table_v1", home_name, league_id, True)
+        last_away_match = extract_last_match_in_league_of(soup_completo, "table_v2", away_name, league_id, False)
+        h2h_data = extract_h2h_data_of(soup_completo, home_name, away_name, None)
+        comp_L_vs_UV_A = extract_comparative_match_of(soup_completo, "table_v1", home_name, (last_away_match or {}).get('home_team'), league_id, True)
+        comp_V_vs_UL_H = extract_comparative_match_of(soup_completo, "table_v2", away_name, (last_home_match or {}).get('away_team'), league_id, False)
+        main_match_odds_data = extract_bet365_initial_odds_of(soup_completo)
+        final_score, _ = extract_final_score_of(soup_completo)
+
+        details_h2h_col3 = get_h2h_details_for_original_logic_of(
+            session, key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
+        )
     except Exception as exc:
         return {"error": f"Error durante el análisis: {exc}"}
 
