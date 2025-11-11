@@ -1,0 +1,19 @@
+col_data = {
+  "AH_H2H_V": "-",           # Hándicap último enfrentamiento local en casa vs visitante
+  "AH_Act": "?",             # Línea actual de hándicap del partido
+  "Res_H2H_V": "?*?",        # Resultado del H2H local vs visitante
+  "AH_L_H": "-",             # Hándicap del último partido del local en casa
+  "Res_L_H": "?*?",          # Resultado del local en casa
+  "AH_V_A": "-",             # Hándicap del último partido del visitante fuera
+  "Res_V_A": "?*?",          # Resultado del visitante fuera
+  "AH_H2H_G": "-",           # Hándicap del H2H general
+  "Res_H2H_G": "?*?",        # Resultado del H2H general
+  "L_vs_UV_A": "-",          # Comparativa indirecta local vs último rival visitante
+  "V_vs_UL_H": "-",          # Comparativa indirecta visitante vs último rival local
+  "Stats_L": "...",          # Estadísticas formateadas del local
+  "Stats_V": "...",          # Estadísticas formateadas del visitante
+  "Fin": "?*?",              # Resultado final
+  "G_i": "?",                # Línea de goles
+  "League": "nombre liga",  # Nombre de liga
+  "match_id": "1234567"     # ID partido
+}

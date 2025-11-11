@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: python-flask-app
+    env: python
+    pythonVersion: "3.11"
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install --with-deps
+    startCommand: "gunicorn --workers 4 --bind 0.0.0.0:$PORT src.app:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"

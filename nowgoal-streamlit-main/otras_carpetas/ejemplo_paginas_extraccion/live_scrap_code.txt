@@ -1,0 +1,146 @@
+#La url de donde se extrae todo es la siguiente 
+(https://live18.nowgoal25.com/match/live-(#aqui debe ir el iid del partido))
+#Los datos que me interesan estan en esta tabla :
+<div id="teamTechDiv_detail" class="content">
+            
+<div>
+    <h2 class="team-table-title">Statistics</h2>
+    <div class="fx20">
+        <ul class="stat">
+                <li>
+                    <span class="stat-c">2</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:40%"></span>
+                    </span>
+                    <span class="stat-title">Corner Kicks</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:60%"></span>
+                    </span>
+                    <span class="stat-c">3</span>
+                </li>
+                <li>
+                    <span class="stat-c">0</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:%"></span>
+                    </span>
+                    <span class="stat-title">Corner Kicks(HT)</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:100%"></span>
+                    </span>
+                    <span class="stat-c">3</span>
+                </li>
+                <li>
+                    <span class="stat-c">0</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:%"></span>
+                    </span>
+                    <span class="stat-title">Yellow Cards</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:100%"></span>
+                    </span>
+                    <span class="stat-c">2</span>
+                </li>
+                <li>
+                    <span class="stat-c">0</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:%"></span>
+                    </span>
+                    <span class="stat-title">Red Cards</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:100%"></span>
+                    </span>
+                    <span class="stat-c">1</span>
+                </li>
+                <li>
+                    <span class="stat-c">8</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:44%"></span>
+                    </span>
+                    <span class="stat-title">Shots</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:56%"></span>
+                    </span>
+                    <span class="stat-c">10</span>
+                </li>
+                <li>
+                    <span class="stat-c">5</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:45%"></span>
+                    </span>
+                    <span class="stat-title">Shots on Goal</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:55%"></span>
+                    </span>
+                    <span class="stat-c">6</span>
+                </li>
+                <li>
+                    <span class="stat-c">132</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:48%"></span>
+                    </span>
+                    <span class="stat-title">Attacks</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:52%"></span>
+                    </span>
+                    <span class="stat-c">141</span>
+                </li>
+                <li>
+                    <span class="stat-c">82</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:49%"></span>
+                    </span>
+                    <span class="stat-title">Dangerous Attacks</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:51%"></span>
+                    </span>
+                    <span class="stat-c">87</span>
+                </li>
+                <li>
+                    <span class="stat-c">3</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:43%"></span>
+                    </span>
+                    <span class="stat-title">Shots off Goal</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:57%"></span>
+                    </span>
+                    <span class="stat-c">4</span>
+                </li>
+                <li>
+                    <span class="stat-c">42%</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:42%"></span>
+                    </span>
+                    <span class="stat-title">Possession</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:58%"></span>
+                    </span>
+                    <span class="stat-c">58%</span>
+                </li>
+                <li>
+                    <span class="stat-c">45%</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:45%"></span>
+                    </span>
+                    <span class="stat-title">Possession(HT)</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:55%"></span>
+                    </span>
+                    <span class="stat-c">55%</span>
+                </li>
+                <li>
+                    <span class="stat-c">4</span>
+                    <span class="stat-bar-wrapper homes">
+                        <span class="stat-bar fr" style="width:36%"></span>
+                    </span>
+                    <span class="stat-title">Saves</span>
+                    <span class="stat-bar-wrapper aways">
+                        <span class="stat-bar fl" style="width:64%"></span>
+                    </span>
+                    <span class="stat-c">7</span>
+                </li>
+        </ul>
+    </div>
+</div>
+
+        </div>
