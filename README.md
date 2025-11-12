@@ -6,7 +6,7 @@
 
 # Despliegue en Render.com
 
-Este proyecto está configurado para un despliegue rápido y sencillo en Render utilizando "Blueprints".
+Este proyecto está configurado para un despliegue robusto y sencillo en Render utilizando **Docker**.
 
 ## Prerrequisitos
 
@@ -16,13 +16,13 @@ Este proyecto está configurado para un despliegue rápido y sencillo en Render 
 
 ## ¿Cómo funciona?
 
-El fichero `render.yaml` en este repositorio le indica a Render todo lo que necesita saber para poner en marcha la aplicación:
+Este proyecto utiliza un **`Dockerfile`** para crear un entorno de ejecución personalizado. Esto resuelve todos los problemas de dependencias que encontramos.
 
--   **Servicio Web**: Crea un servicio web para la aplicación Flask.
--   **Comando de Construcción**: Instala todas las dependencias de Python desde `requirements.txt` y, muy importante, descarga los navegadores que `playwright` necesita para que funcione el análisis de partidos ("Estudio").
--   **Comando de Inicio**: Inicia la aplicación utilizando `gunicorn`, un servidor web de producción.
+-   **Entorno Personalizado**: El `Dockerfile` le dice a Render que use una imagen base oficial de Playwright. Esta imagen ya incluye **todas las librerías de sistema** que `Chrome` necesita para funcionar, garantizando que el scraping del "Estudio" no falle.
+-   **Configuración de Render**: El fichero `render.yaml` ha sido simplificado. Ahora simplemente le dice a Render que construya la aplicación usando el `Dockerfile` y la inicie.
+-   **Lógica de la App**: La aplicación sigue leyendo los partidos desde `data.json`, y solo hace scraping en vivo para los análisis detallados, como querías.
 
-La aplicación está diseñada para leer los listados de partidos directamente desde el fichero `data.json` que tú proporcionas. El scraping en vivo solo se utiliza para los análisis detallados de partidos individuales.
+Este es el método recomendado para aplicaciones complejas como la tuya.
 
 ## Pasos para el Despliegue
 
@@ -39,17 +39,17 @@ La aplicación está diseñada para leer los listados de partidos directamente d
 
 3.  **Conecta tu Repositorio**:
     - Selecciona el repositorio de GitHub que contiene este proyecto.
-    - Render detectará y leerá automáticamente el fichero `render.yaml`.
+    - Render detectará automáticamente los ficheros `render.yaml` y `Dockerfile` y configurará todo.
 
 4.  **Confirma y Despliega**:
     - Render te mostrará el servicio que va a crear. No necesitas cambiar nada.
     - Haz clic en **Apply** o **Create New Services**.
 
-Render se encargará del resto. La primera vez, la construcción puede tardar unos minutos debido a la descarga de los navegadores de Playwright. Una vez terminado, tu aplicación estará online en la URL que Render te proporcione.
+Render se encargará del resto. La construcción puede tardar unos minutos, ya que tiene que construir la imagen de Docker. Una vez terminado, tu aplicación estará online.
 
 ## Cómo Actualizar la Lista de Partidos
 
-Cuando quieras actualizar los partidos que se muestran en la web, sigue estos pasos:
+El flujo para actualizar los partidos no cambia:
 
 1.  **Ejecuta el scraper en tu ordenador**:
     ```bash
@@ -64,4 +64,4 @@ Cuando quieras actualizar los partidos que se muestran en la web, sigue estos pa
     git push
     ```
 
-3.  **Despliegue Automático**: Por defecto, Render detectará el `push` a tu repositorio y automáticamente volverá a desplegar la aplicación con el nuevo `data.json`. Si no tienes activado el despliegue automático, puedes iniciarlo manualmente desde el dashboard de Render.
+3.  **Despliegue Automático**: Render detectará los cambios y redesplegará la aplicación automáticamente con la nueva lista de partidos.
