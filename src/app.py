@@ -627,6 +627,7 @@ def _render_matches_dashboard(page_mode='upcoming', page_title='Partidos'):
     handicap_filter = request.args.get('handicap')
     goal_line_filter = request.args.get('ou')
     error_msg = None
+    import asyncio
     try:
         upcoming_matches, finished_matches = asyncio.run(
             _fetch_sidebar_lists(handicap_filter, goal_line_filter)
