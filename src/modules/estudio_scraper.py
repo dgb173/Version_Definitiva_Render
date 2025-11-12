@@ -13,6 +13,8 @@ from urllib3.util.retry import Retry
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
@@ -679,10 +681,16 @@ def _get_or_create_selenium_driver():
     with _driver_instance_lock:
         if _driver_instance is None:
             try:
-                _driver_instance = webdriver.Chrome(options=_build_selenium_options())
+                service = ChromeService(ChromeDriverManager().install())
+                _driver_instance = webdriver.Chrome(service=service, options=_build_selenium_options())
             except WebDriverException as exc:
                 print(f"Error inicializando Selenium driver: {exc}")
-                _driver_instance = None
+                # Intento de fallback sin webdriver-manager, por si acaso
+                try:
+                    _driver_instance = webdriver.Chrome(options=_build_selenium_options())
+                except Exception as final_exc:
+                    print(f"Fallo el intento de fallback de Selenium: {final_exc}")
+                    _driver_instance = None
         return _driver_instance
 
 
