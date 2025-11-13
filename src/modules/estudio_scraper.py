@@ -637,6 +637,90 @@ def extract_comparative_match_of(soup, table_id, main_team, opponent, league_id,
     return None
 
 
+def _extract_recent_matches_for_team(soup, table_id, team_name, limit=5):
+    if not (soup and table_id and team_name):
+        return []
+    table = soup.find("table", id=table_id)
+    if not table:
+        return []
+    score_selector = 'fscore_1' if table_id == 'table_v1' else 'fscore_2'
+    collected = []
+    for row in table.find_all("tr", id=re.compile(rf"tr{table_id[-1]}_\d+")):
+        details = get_match_details_from_row_of(row, score_class_selector=score_selector, source_table_type='hist')
+        if not details:
+            continue
+        home_name = details.get('home', '').lower()
+        away_name = details.get('away', '').lower()
+        target = team_name.lower()
+        if target not in (home_name, away_name):
+            continue
+        is_home = target == home_name
+        opponent = details.get('away') if is_home else details.get('home')
+        entry = {
+            'match_id': details.get('matchIndex'),
+            'home_team': details.get('home'),
+            'away_team': details.get('away'),
+            'score': details.get('score'),
+            'score_raw': details.get('score_raw'),
+            'handicap_line_raw': details.get('ahLine_raw'),
+            'handicap_line': details.get('ahLine'),
+            'league_id': details.get('league_id_hist'),
+            'date': details.get('date'),
+            'is_home': is_home,
+            'opponent': opponent,
+            'handicap_numeric': parse_ah_to_number_of(details.get('ahLine_raw') or ''),
+        }
+        collected.append(entry)
+        if len(collected) >= limit:
+            break
+    return collected
+
+
+def _filter_stats_rows(rows):
+    filtered = []
+    for row in rows or []:
+        label = (row.get('label') or '').lower()
+        if 'dangerous attack' in label:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _build_comparativas_directas_summary(soup, home_name, away_name, stats_loader, limit=5):
+    home_recent = _extract_recent_matches_for_team(soup, "table_v1", home_name, limit=limit)
+    away_recent = _extract_recent_matches_for_team(soup, "table_v2", away_name, limit=limit)
+    if not home_recent or not away_recent:
+        return []
+
+    def map_by_rival(entries):
+        mapping = {}
+        for entry in entries:
+            key = (entry.get('opponent') or '').lower()
+            if not key:
+                continue
+            mapping.setdefault(key, []).append(entry)
+        return mapping
+
+    home_map = map_by_rival(home_recent)
+    away_map = map_by_rival(away_recent)
+
+    shared_keys = [key for key in home_map.keys() if key in away_map]
+    results = []
+    for key in shared_keys:
+        home_entry = home_map[key][0]
+        away_entry = away_map[key][0]
+        home_stats = _filter_stats_rows(stats_loader(home_entry.get('match_id')))
+        away_stats = _filter_stats_rows(stats_loader(away_entry.get('match_id')))
+        results.append({
+            'rival': home_entry.get('opponent') or away_entry.get('opponent'),
+            'home': {'details': home_entry, 'stats': home_stats},
+            'away': {'details': away_entry, 'stats': away_stats},
+        })
+        if len(results) >= limit:
+            break
+    return results
+
+
 def _load_main_match_soup(driver, main_match_id: str):
     main_page_url = f"{BASE_URL_OF}/match/h2h-{main_match_id}"
     driver.get(main_page_url)
@@ -757,6 +841,13 @@ def analizar_partido_completo(match_id: str):
     comp_V_vs_UL_H_stats = get_stats_rows((comp_V_vs_UL_H or {}).get('match_id'))
     h2h_stadium_stats = get_stats_rows(h2h_data.get('match1_id'))
     h2h_general_stats = get_stats_rows(h2h_data.get('match6_id'))
+    comparativas_directas = _build_comparativas_directas_summary(
+        soup_completo,
+        home_name,
+        away_name,
+        stats_loader=get_stats_rows,
+        limit=5,
+    )
 
     results = {
         "match_id": main_match_id,
@@ -778,6 +869,7 @@ def analizar_partido_completo(match_id: str):
         "h2h_col3": {"details": details_h2h_col3, "stats": h2h_col3_stats},
         "comp_L_vs_UV_A": {"details": comp_L_vs_UV_A, "stats": comp_L_vs_UV_A_stats},
         "comp_V_vs_UL_H": {"details": comp_V_vs_UL_H, "stats": comp_V_vs_UL_H_stats},
+        "comparativas_directas": comparativas_directas,
         "h2h_stadium": {"details": h2h_data, "stats": h2h_stadium_stats},
         "h2h_general": {"details": h2h_data, "stats": h2h_general_stats},
         "execution_time_seconds": round(time.time() - start_time, 2),
