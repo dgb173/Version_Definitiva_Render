@@ -90,6 +90,7 @@
         .mini-match { border:1px solid #ecefff; border-radius:12px; padding:12px; background:#fdfdff; margin-bottom:10px; }
         .mini-match:last-child { margin-bottom:0; }
         .mini-match-meta { display:flex; align-items:center; gap:8px; font-size:0.78rem; color:#64708a; flex-wrap:wrap; margin-bottom:6px; }
+        .mini-date { color:#94a3b8; font-size:0.74rem; }
         .result-pill { width:24px; height:24px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; }
         .mini-match.is-win .result-pill { background:#d1fae5; color:#0f766e; }
         .mini-match.is-loss .result-pill { background:#fee2e2; color:#b91c1c; }
@@ -111,6 +112,13 @@
         .comparative-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:0.85rem; margin-top:8px; }
         .comparative-row .result-pill { width:26px; height:26px; }
         .comparative-row .handicap-chip { background:#fff; border:1px solid #dfe3ff; }
+        .comparative-meta { display:flex; gap:6px; flex-wrap:wrap; font-size:0.75rem; color:#94a3b8; }
+        .comparative-row .comparative-meta { flex-basis:100%; justify-content:space-between; margin-bottom:4px; }
+        .similarity-tag { display:inline-flex; align-items:center; padding:2px 10px; border-radius:999px; font-size:0.72rem; font-weight:600; margin-left:auto; }
+        .similarity-identical, .similarity-close { background:#ecfdf5; color:#0f766e; }
+        .similarity-near { background:#fef3c7; color:#b45309; }
+        .similarity-different { background:#fee2e2; color:#b91c1c; }
+        .similarity-unknown { background:#e2e8f0; color:#475569; }
         @media (max-width: 992px) {
             .app-shell { flex-direction:column; }
             .sidebar {
@@ -196,7 +204,7 @@
                                 {% set competition = match.competition or match.league or match.league_name %}
                                 {% set goal_value = match.goal_line or match.goal_line_alt or match.goal_line_decimal %}
                                 <div class="match-card" data-match-id="{{ card_id }}" data-section="upcoming">
-                                    <div class="match-time">{{ match.time or '-' }}</div>
+                                    <div class="match-time">{{ match.time_display or match.time or '-' }}</div>
                                     <div class="teams">{{ match.home_team or match.homeName }} vs {{ match.away_team or match.awayName }}</div>
                                     {% if competition %}<div class="competition">{{ competition }}</div>{% endif %}
                                     <div class="match-card-meta">
@@ -224,7 +232,7 @@
                                 {% set competition = match.competition or match.league or match.league_name %}
                                 {% set goal_value = match.goal_line or match.goal_line_alt or match.goal_line_decimal %}
                                 <div class="match-card" data-match-id="{{ card_id }}" data-section="finished">
-                                    <div class="match-time">{{ match.time or '-' }}</div>
+                                    <div class="match-time">{{ match.time_display or match.time or '-' }}</div>
                                     <div class="teams">{{ match.home_team or match.homeName }} vs {{ match.away_team or match.awayName }}</div>
                                     {% if match.score %}<div class="score-pill">{{ match.score }}</div>{% endif %}
                                     {% if competition %}<div class="competition">{{ competition }}</div>{% endif %}
@@ -294,12 +302,6 @@
                 }
             });
 
-            const autoCollapseSidebarForMobile = () => {
-                if (isMobileView()) {
-                    setSidebarCollapsed(true);
-                }
-            };
-
             const setDetailContent = (html) => {
                 detailPanel.innerHTML = html;
                 detailPanel.scrollTop = 0;
@@ -324,7 +326,14 @@
             };
 
             const safeArray = (value) => (Array.isArray(value) ? value : []);
-            const formatHandicapText = (line) => (line && line !== '-') ? `AH ${line}` : 'AH -';
+            const pickHandicapValue = (match) => {
+                if (!match) return '-';
+                return match.handicap || match.raw_handicap || match.handicap_display || '-';
+            };
+            const formatHandicapText = (match) => {
+                const value = pickHandicapValue(match);
+                return (value && value !== '-') ? `AH ${value}` : 'AH -';
+            };
 
             const renderRecentMatch = (match) => {
                 const result = (match.result || '').toUpperCase();
@@ -336,7 +345,7 @@
                         <div class="mini-match-meta">
                             <span class="result-pill">${result || '-'}</span>
                             <span>${match.league || '-'}</span>
-                            <span>${match.date || ''}</span>
+                            <span class="mini-date">${match.date || ''}</span>
                         </div>
                         <div class="mini-match-teams">
                             <span class="team-chip ${match.is_home ? 'is-focus' : ''}">${match.home_team || '-'}</span>
@@ -344,7 +353,7 @@
                             <span class="team-chip ${match.is_home ? '' : 'is-focus'}">${match.away_team || '-'}</span>
                         </div>
                         <div class="mini-match-tags">
-                            <span class="handicap-chip">${formatHandicapText(match.handicap)}</span>
+                            <span class="handicap-chip">${formatHandicapText(match)}</span>
                             <span class="role-chip">${match.is_home ? 'Local' : 'Visitante'}</span>
                         </div>
                     </div>
@@ -407,20 +416,37 @@
                 let resultClass = 'is-draw';
                 if (result === 'W') resultClass = 'is-win';
                 if (result === 'L') resultClass = 'is-loss';
+                const deltaText = typeof match.delta_vs_current === 'number'
+                    ? `<span class="mini-date">Δ actual: ${match.delta_vs_current.toFixed(2)}</span>`
+                    : '';
                 return `
                     <div class="comparative-row ${resultClass}">
+                        <div class="comparative-meta">
+                            <span>${match.league || '-'}</span>
+                            <span class="mini-date">${match.date || ''}</span>
+                            ${deltaText}
+                        </div>
                         <span class="result-pill">${result || '-'}</span>
                         <span class="team-chip ${match.is_home ? 'is-focus' : ''}">${match.home_team || '-'}</span>
                         <span class="score-chip">${match.score || '-'}</span>
                         <span class="team-chip ${match.is_home ? '' : 'is-focus'}">${match.away_team || '-'}</span>
-                        <span class="handicap-chip">${formatHandicapText(match.handicap)}</span>
+                        <span class="handicap-chip">${formatHandicapText(match)}</span>
                     </div>
                 `;
             };
 
             const renderComparativeCard = (item) => `
                 <div class="comparative-card">
-                    <div class="comparative-rival">Rival: ${item.rival || '-'}</div>
+                    <div class="comparative-rival">
+                        Rival: ${item.rival || '-'}
+                        ${item.handicap_similarity ? `<span class="similarity-tag similarity-${item.handicap_similarity}">${({
+                            identical: 'Handicap idéntico',
+                            close: 'Handicap muy similar',
+                            near: 'Handicap parecido',
+                            different: 'Handicap distinto',
+                            unknown: 'Handicap sin dato'
+                        })[item.handicap_similarity] || ''}</span>` : ''}
+                    </div>
                     <div class="text-muted small">Equipo local</div>
                     ${renderComparativeRow(item.home_match, 'Equipo local')}
                     <div class="text-muted small mt-2">Equipo visitante</div>
@@ -444,12 +470,13 @@
                 const recentForm = data.recent_form || {};
                 const upcoming = data.upcoming_matches || {};
                 const comparisons = data.direct_comparisons || [];
+                const scheduledLabel = data.time_display || data.time || data.time_obj;
                 return `
                     <div class="panel-card quick-preview">
                         <div class="panel-card-header">
                             <h2>${data.home_team || '-'} vs ${data.away_team || '-'}</h2>
                             <p class="text-muted mb-1">${data.competition || ''}</p>
-                            <p class="text-muted small mb-0">${statusLabel} · ${formatDisplayTime(data.time || data.time_obj)}</p>
+                            <p class="text-muted small mb-0">${statusLabel} · ${formatDisplayTime(scheduledLabel)}</p>
                         </div>
                         <div class="panel-analysis">
                             <div class="mb-3">${handicap}${goalLine}</div>
@@ -611,7 +638,6 @@
                     } else {
                         loadQuickPreview(matchId, section);
                     }
-                    autoCollapseSidebarForMobile();
                     return;
                 }
 
@@ -621,7 +647,6 @@
                     const section = card.dataset.section;
                     setActiveCard(matchId);
                     loadQuickPreview(matchId, section);
-                    autoCollapseSidebarForMobile();
                 }
             });
 

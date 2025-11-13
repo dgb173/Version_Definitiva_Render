@@ -100,9 +100,10 @@ def _parse_time_obj(value):
 
 
 def _ensure_time_string(entry, parsed_time):
-    if entry.get('time') or not parsed_time:
-        return
-    entry['time'] = parsed_time.strftime('%d/%m %H:%M')
+    if parsed_time:
+        entry['time_display'] = parsed_time.strftime('%d/%m %H:%M')
+        if not entry.get('time'):
+            entry['time'] = entry['time_display']
 
 
 def _build_handicap_filter_predicate(handicap_filter):
@@ -244,6 +245,21 @@ def _normalize_score_text(raw_text: str):
     return cleaned
 
 
+def _parse_match_date_value(value):
+    if not value:
+        return None
+    candidates = [value.strip()]
+    if 'T' in value and ':' in value:
+        candidates.append(value.replace('T', ' '))
+    for raw in candidates:
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%d-%m-%Y %H:%M', '%d-%m-%Y', '%d/%m/%Y %H:%M', '%d/%m/%Y'):
+            try:
+                return datetime.datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+    return None
+
+
 def _extract_score_numbers(score_text: str):
     normalized = _normalize_score_text(score_text)
     match = re.search(r'(\d+)\s*[-:]\s*(\d+)', normalized)
@@ -274,7 +290,10 @@ def _extract_row_details(row_element, score_class: str):
         if len(cells) < 5:
             return None
         league = cells[0].get_text(strip=True)
-        date = cells[1].get_text(" ", strip=True)
+        date_span = cells[1].find('span', attrs={'name': 'timeData'})
+        date_attr = date_span.get('data-t') if date_span else ''
+        date_text = date_span.get_text(" ", strip=True) if date_span else cells[1].get_text(" ", strip=True)
+        parsed_date = _parse_match_date_value(date_attr or date_text)
         home_team = cells[2].get_text(strip=True)
         away_team = cells[4].get_text(strip=True)
         score_cell = cells[3]
@@ -284,15 +303,19 @@ def _extract_row_details(row_element, score_class: str):
         handicap_raw = '-'
         if handicap_cell:
             handicap_raw = (handicap_cell.get('data-o') or handicap_cell.get_text(strip=True) or '-').strip() or '-'
+        handicap_numeric = parse_ah_to_number_of(handicap_raw)
         return {
             'league': league,
-            'date': date,
+            'date': date_text,
+            'date_attr': date_attr,
+            'date_ts': parsed_date.timestamp() if parsed_date else None,
             'home_team': home_team,
             'away_team': away_team,
             'score': score_text.replace('-', ' - ').replace(':', ' : '),
             'score_raw': score_text,
             'handicap': format_ah_as_decimal_string_of(handicap_raw),
-            'raw_handicap': handicap_raw
+            'raw_handicap': handicap_raw,
+            'handicap_numeric': handicap_numeric
         }
     except Exception:
         return None
@@ -367,9 +390,9 @@ def _extract_fixture_matches(soup, container_selector: str, team_name: str, limi
 
 
 def _map_matches_by_opponent(table, team_name: str, score_class: str):
-    results = {}
+    mapping = {}
     if not (table and team_name):
-        return results
+        return mapping
     table_id = table.get('id') or ''
     suffix = table_id[-1] if table_id else '1'
     pattern = re.compile(rf"tr{suffix}_\d+")
@@ -384,19 +407,49 @@ def _map_matches_by_opponent(table, team_name: str, score_class: str):
             continue
         is_home = target == home_name
         opponent = details['away_team'] if is_home else details['home_team']
-        key = opponent.lower()
-        if key in results:
-            continue
-        results[key] = {
+        entry = {
             **details,
             'is_home': is_home,
             'opponent': opponent,
-            'result': _result_for_team(details['score_raw'], is_home)
+            'result': _result_for_team(details['score_raw'], is_home),
         }
-    return results
+        mapping.setdefault(opponent.lower(), []).append(entry)
+    for values in mapping.values():
+        values.sort(key=lambda item: item.get('date_ts') or 0, reverse=True)
+    return mapping
 
 
-def _extract_common_comparatives(soup, home_name: str, away_name: str, limit: int = 3):
+def _select_best_comparative_pair(home_matches, away_matches):
+    if not home_matches or not away_matches:
+        return None, None, None
+    best_pair = (home_matches[0], away_matches[0])
+    best_diff = None
+    for hm in home_matches:
+        h_val = hm.get('handicap_numeric')
+        for am in away_matches:
+            a_val = am.get('handicap_numeric')
+            if h_val is None or a_val is None:
+                continue
+            diff = abs(h_val - a_val)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_pair = (hm, am)
+    return best_pair[0], best_pair[1], best_diff
+
+
+def _describe_similarity(diff_value):
+    if diff_value is None:
+        return 'unknown'
+    if diff_value <= 0.01:
+        return 'identical'
+    if diff_value <= 0.25:
+        return 'close'
+    if diff_value <= 0.5:
+        return 'near'
+    return 'different'
+
+
+def _extract_common_comparatives(soup, home_name: str, away_name: str, limit: int = 3, current_handicap_value: float | None = None):
     if not soup:
         return []
     table_home = soup.find("table", id="table_v1")
@@ -406,17 +459,37 @@ def _extract_common_comparatives(soup, home_name: str, away_name: str, limit: in
     home_map = _map_matches_by_opponent(table_home, home_name, 'fscore_1')
     away_map = _map_matches_by_opponent(table_away, away_name, 'fscore_2')
     common_keys = [k for k in home_map.keys() if k in away_map]
+    common_keys.sort(key=lambda key: (home_map[key][0].get('date_ts') or 0), reverse=True)
     results = []
-    for key in common_keys[:limit]:
+    for key in common_keys:
+        home_matches = home_map.get(key) or []
+        away_matches = away_map.get(key) or []
+        if not home_matches or not away_matches:
+            continue
+        selected_home, selected_away, diff_value = _select_best_comparative_pair(home_matches, away_matches)
+        if not selected_home or not selected_away:
+            continue
+        similarity_code = _describe_similarity(diff_value)
+        payload_home = dict(selected_home)
+        payload_away = dict(selected_away)
+        if current_handicap_value is not None:
+            h_val = payload_home.get('handicap_numeric')
+            a_val = payload_away.get('handicap_numeric')
+            payload_home['delta_vs_current'] = abs(h_val - current_handicap_value) if h_val is not None else None
+            payload_away['delta_vs_current'] = abs(a_val - current_handicap_value) if a_val is not None else None
         results.append({
-            'rival': home_map[key]['opponent'],
-            'home_match': home_map[key],
-            'away_match': away_map[key]
+            'rival': payload_home.get('opponent') or payload_away.get('opponent') or key,
+            'home_match': payload_home,
+            'away_match': payload_away,
+            'handicap_similarity': similarity_code,
+            'handicap_diff': diff_value
         })
+        if len(results) >= limit:
+            break
     return results
 
 
-def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: str):
+def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: str, current_handicap_value: float | None = None):
     cached = _read_quick_preview_cache(match_id)
     if cached:
         return cached
@@ -444,21 +517,25 @@ def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: st
                 'matches': _extract_fixture_matches(soup, ".guest-div", away_team)
             }
         },
-        'direct_comparisons': _extract_common_comparatives(soup, home_team, away_team)
+        'direct_comparisons': _extract_common_comparatives(soup, home_team, away_team, current_handicap_value=current_handicap_value)
     }
     _write_quick_preview_cache(match_id, preview_payload)
     return preview_payload
 
 
-def _filter_and_slice_matches(section, limit=None, offset=0, handicap_filter=None, goal_line_filter=None, sort_desc=False):
+def _filter_and_slice_matches(section, limit=None, offset=0, handicap_filter=None, goal_line_filter=None, sort_desc=False, drop_started=False):
     data = load_data_from_file()
     matches = data.get(section, [])
     prepared = []
+    now_reference = datetime.datetime.now()
     for original in matches:
         entry = dict(original)
         parsed_time = _parse_time_obj(entry.get('time_obj'))
         entry['_sort_time'] = parsed_time or datetime.datetime.min
         _ensure_time_string(entry, parsed_time)
+        if drop_started and parsed_time and parsed_time <= now_reference:
+            # Skip matches that already started when explicitly requested (only for próximos)
+            continue
         prepared.append(entry)
 
     handicap_predicate = _build_handicap_filter_predicate(handicap_filter)
@@ -851,6 +928,7 @@ async def get_main_page_matches_async(limit=None, offset=0, handicap_filter=None
         handicap_filter=handicap_filter,
         goal_line_filter=goal_line_filter,
         sort_desc=False,
+        drop_started=True,
     )
 
 
@@ -958,6 +1036,7 @@ def api_preview_basico(match_id):
             'home_team': home_name,
             'away_team': away_name,
             'time': entry.get('time'),
+            'time_display': entry.get('time_display'),
             'time_obj': entry.get('time_obj'),
             'score': entry.get('score'),
             'handicap': entry.get('handicap'),
@@ -966,7 +1045,8 @@ def api_preview_basico(match_id):
             'goal_line_decimal': entry.get('goal_line_decimal'),
             'competition': entry.get('competition'),
         }
-        extra_preview = _build_enhanced_preview_payload(match_id, home_name, away_name)
+        current_handicap_value = parse_ah_to_number_of(entry.get('handicap') or '')
+        extra_preview = _build_enhanced_preview_payload(match_id, home_name, away_name, current_handicap_value)
         if extra_preview:
             payload.update(extra_preview)
         return jsonify(payload)
