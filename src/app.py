@@ -200,6 +200,255 @@ def _build_goal_line_options_from_lists(match_lists):
     except ValueError:
         return sorted(values)
 
+_QUICK_PREVIEW_TTL_SECONDS = 240
+_quick_preview_cache = {}
+_quick_preview_cache_lock = threading.Lock()
+
+
+def _read_quick_preview_cache(match_id: str):
+    with _quick_preview_cache_lock:
+        entry = _quick_preview_cache.get(str(match_id))
+        if not entry:
+            return None
+        ts, payload = entry
+        if (time.time() - ts) > _QUICK_PREVIEW_TTL_SECONDS:
+            _quick_preview_cache.pop(str(match_id), None)
+            return None
+        return payload
+
+
+def _write_quick_preview_cache(match_id: str, payload: dict):
+    with _quick_preview_cache_lock:
+        _quick_preview_cache[str(match_id)] = (time.time(), payload)
+
+
+def _fetch_match_analysis_soup(match_id: str):
+    if not match_id:
+        return None
+    url_path = f"match/h2h-{match_id}"
+    target_url = _build_nowgoal_url(url_path)
+    html = _fetch_nowgoal_html_sync(target_url)
+    if not html:
+        return None
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return None
+
+
+def _normalize_score_text(raw_text: str):
+    if not raw_text:
+        return ''
+    cleaned = raw_text.strip().replace('\n', ' ').replace('\r', ' ')
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
+
+def _extract_score_numbers(score_text: str):
+    normalized = _normalize_score_text(score_text)
+    match = re.search(r'(\d+)\s*[-:]\s*(\d+)', normalized)
+    if not match:
+        return None, None
+    try:
+        return int(match.group(1)), int(match.group(2))
+    except ValueError:
+        return None, None
+
+
+def _result_for_team(score_text: str, is_home_team: bool):
+    home_goals, away_goals = _extract_score_numbers(score_text)
+    if home_goals is None or away_goals is None:
+        return ''
+    team_goals = home_goals if is_home_team else away_goals
+    opp_goals = away_goals if is_home_team else home_goals
+    if team_goals > opp_goals:
+        return 'W'
+    if team_goals < opp_goals:
+        return 'L'
+    return 'D'
+
+
+def _extract_row_details(row_element, score_class: str):
+    try:
+        cells = row_element.find_all('td')
+        if len(cells) < 5:
+            return None
+        league = cells[0].get_text(strip=True)
+        date = cells[1].get_text(" ", strip=True)
+        home_team = cells[2].get_text(strip=True)
+        away_team = cells[4].get_text(strip=True)
+        score_cell = cells[3]
+        score_span = score_cell.find('span', class_=lambda cls: isinstance(cls, str) and score_class in cls)
+        score_text = _normalize_score_text(score_span.get_text(strip=True) if score_span else score_cell.get_text(strip=True))
+        handicap_cell = cells[11] if len(cells) > 11 else None
+        handicap_raw = '-'
+        if handicap_cell:
+            handicap_raw = (handicap_cell.get('data-o') or handicap_cell.get_text(strip=True) or '-').strip() or '-'
+        return {
+            'league': league,
+            'date': date,
+            'home_team': home_team,
+            'away_team': away_team,
+            'score': score_text.replace('-', ' - ').replace(':', ' : '),
+            'score_raw': score_text,
+            'handicap': format_ah_as_decimal_string_of(handicap_raw),
+            'raw_handicap': handicap_raw
+        }
+    except Exception:
+        return None
+
+
+def _extract_recent_matches_from_soup(soup, table_id: str, target_team: str, limit: int = 5):
+    if not (soup and table_id and target_team):
+        return []
+    table = soup.find("table", id=table_id)
+    if not table:
+        return []
+    score_class = 'fscore_1' if table_id == 'table_v1' else 'fscore_2'
+    matches = []
+    for row in table.find_all("tr", id=re.compile(rf"tr{table_id[-1]}_\d+")):
+        details = _extract_row_details(row, score_class)
+        if not details:
+            continue
+        home_name = details['home_team'].lower()
+        away_name = details['away_team'].lower()
+        target_name = target_team.lower()
+        if target_name not in (home_name, away_name):
+            continue
+        is_home = target_name == home_name
+        matches.append({
+            **details,
+            'is_home': is_home,
+            'opponent': details['away_team'] if is_home else details['home_team'],
+            'result': _result_for_team(details['score_raw'], is_home)
+        })
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _extract_fixture_matches(soup, container_selector: str, team_name: str, limit: int = 3):
+    if not soup or not container_selector or not team_name:
+        return []
+    fixture_block = soup.find(id="porletP12")
+    if not fixture_block:
+        return []
+    container = fixture_block.select_one(container_selector)
+    if not container:
+        return []
+    table = container.find('table')
+    if not table:
+        return []
+    matches = []
+    for row in table.find_all('tr'):
+        if row.find('th'):
+            continue
+        cells = [c.get_text(" ", strip=True) for c in row.find_all('td')]
+        if len(cells) < 4:
+            continue
+        league = cells[0]
+        date = cells[1] if len(cells) > 1 else ''
+        home_team = cells[2] if len(cells) > 2 else ''
+        away_team = cells[-1]
+        if not home_team or not away_team:
+            continue
+        is_home = home_team.lower() == team_name.lower()
+        matches.append({
+            'league': league,
+            'date': date,
+            'home_team': home_team,
+            'away_team': away_team,
+            'is_home': is_home,
+            'opponent': away_team if is_home else home_team
+        })
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _map_matches_by_opponent(table, team_name: str, score_class: str):
+    results = {}
+    if not (table and team_name):
+        return results
+    table_id = table.get('id') or ''
+    suffix = table_id[-1] if table_id else '1'
+    pattern = re.compile(rf"tr{suffix}_\d+")
+    for row in table.find_all("tr", id=pattern):
+        details = _extract_row_details(row, score_class)
+        if not details:
+            continue
+        home_name = details['home_team'].lower()
+        away_name = details['away_team'].lower()
+        target = team_name.lower()
+        if target not in (home_name, away_name):
+            continue
+        is_home = target == home_name
+        opponent = details['away_team'] if is_home else details['home_team']
+        key = opponent.lower()
+        if key in results:
+            continue
+        results[key] = {
+            **details,
+            'is_home': is_home,
+            'opponent': opponent,
+            'result': _result_for_team(details['score_raw'], is_home)
+        }
+    return results
+
+
+def _extract_common_comparatives(soup, home_name: str, away_name: str, limit: int = 3):
+    if not soup:
+        return []
+    table_home = soup.find("table", id="table_v1")
+    table_away = soup.find("table", id="table_v2")
+    if not (table_home and table_away):
+        return []
+    home_map = _map_matches_by_opponent(table_home, home_name, 'fscore_1')
+    away_map = _map_matches_by_opponent(table_away, away_name, 'fscore_2')
+    common_keys = [k for k in home_map.keys() if k in away_map]
+    results = []
+    for key in common_keys[:limit]:
+        results.append({
+            'rival': home_map[key]['opponent'],
+            'home_match': home_map[key],
+            'away_match': away_map[key]
+        })
+    return results
+
+
+def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: str):
+    cached = _read_quick_preview_cache(match_id)
+    if cached:
+        return cached
+    soup = _fetch_match_analysis_soup(match_id)
+    if not soup:
+        return None
+    preview_payload = {
+        'recent_form': {
+            'home': {
+                'team': home_team,
+                'matches': _extract_recent_matches_from_soup(soup, "table_v1", home_team)
+            },
+            'away': {
+                'team': away_team,
+                'matches': _extract_recent_matches_from_soup(soup, "table_v2", away_team)
+            }
+        },
+        'upcoming_matches': {
+            'home': {
+                'team': home_team,
+                'matches': _extract_fixture_matches(soup, ".home-div", home_team)
+            },
+            'away': {
+                'team': away_team,
+                'matches': _extract_fixture_matches(soup, ".guest-div", away_team)
+            }
+        },
+        'direct_comparisons': _extract_common_comparatives(soup, home_team, away_team)
+    }
+    _write_quick_preview_cache(match_id, preview_payload)
+    return preview_payload
+
 
 def _filter_and_slice_matches(section, limit=None, offset=0, handicap_filter=None, goal_line_filter=None, sort_desc=False):
     data = load_data_from_file()
@@ -701,11 +950,13 @@ def api_preview_basico(match_id):
         entry, section = _find_match_basic_data(match_id)
         if not entry:
             return jsonify({'error': 'Partido no encontrado'}), 404
+        home_name = entry.get('home_team') or entry.get('homeName')
+        away_name = entry.get('away_team') or entry.get('awayName')
         payload = {
             'id': entry.get('id'),
             'section': section,
-            'home_team': entry.get('home_team'),
-            'away_team': entry.get('away_team'),
+            'home_team': home_name,
+            'away_team': away_name,
             'time': entry.get('time'),
             'time_obj': entry.get('time_obj'),
             'score': entry.get('score'),
@@ -715,6 +966,9 @@ def api_preview_basico(match_id):
             'goal_line_decimal': entry.get('goal_line_decimal'),
             'competition': entry.get('competition'),
         }
+        extra_preview = _build_enhanced_preview_payload(match_id, home_name, away_name)
+        if extra_preview:
+            payload.update(extra_preview)
         return jsonify(payload)
     except Exception as exc:
         return jsonify({'error': f'No se pudo cargar la vista previa: {exc}'}), 500
