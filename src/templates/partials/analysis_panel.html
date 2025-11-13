@@ -1,4 +1,4 @@
-<div class="analysis-panel" data-current-match="{{ data.match_id or data.id }}">
+﻿<div class="analysis-panel" data-current-match="{{ data.match_id or data.id }}">
     <style>
         .analysis-panel .home-color { color:#2563eb; font-weight:700; }
         .analysis-panel .away-color { color:#f97316; font-weight:700; }
@@ -83,6 +83,18 @@
             </tr>
         {% endfor %}
     {%- endmacro %}
+    {% macro render_match_date(entry, label='Fecha del partido') -%}
+        {% if entry %}
+            {% set fields = ['match_datetime','match_date','date','date_text','match_time','time','date_attr'] %}
+            {% for field in fields %}
+                {% set value = attribute(entry, field) %}
+                {% if value %}
+                    <p class="text-muted small mb-2">{{ label }}: {{ value }}</p>
+                    {% break %}
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+    {%- endmacro %}
     {% set odds = data.main_match_odds or {} %}
     <div class="panel-header d-flex flex-column flex-md-row align-items-md-center justify-content-md-between gap-3 mb-4">
         <div>
@@ -102,6 +114,7 @@
                 {% endif %}
             </div>
             {% endif %}
+            {{ render_match_date(data) }}
         </div>
         <div class="d-flex flex-wrap gap-2">
             <button class="btn btn-outline-primary btn-sm analysis-preview-trigger" data-preview-target="analysis-preview-container" data-match-id="{{ data.match_id or data.id }}">
@@ -175,6 +188,7 @@
                             {% if data.last_home_match.details %}
                                 {% set res = data.last_home_match.details %}
                                 <p><span class="home-color">{{ res.home_team }}</span> <span class="score-value">{{ res.score }}</span> <span class="away-color">{{ res.away_team }}</span></p>
+                                {{ render_match_date(res) }}
                                 <p><b>AH:</b> <span class="ah-value">{{ format_ah(res.handicap_line_raw) }}</span></p>
                                 {% if data.last_home_match.stats %}
                                     <h6 class="mt-3 text-muted">Estadísticas</h6>
@@ -193,6 +207,7 @@
                             {% if data.last_away_match.details %}
                                 {% set res = data.last_away_match.details %}
                                 <p><span class="home-color">{{ res.home_team }}</span> <span class="score-value">{{ res.score }}</span> <span class="away-color">{{ res.away_team }}</span></p>
+                                {{ render_match_date(res) }}
                                 <p><b>AH:</b> <span class="ah-value">{{ format_ah(res.handicap_line_raw) }}</span></p>
                                 {% if data.last_away_match.stats %}
                                     <h6 class="mt-3 text-muted">Estadísticas</h6>
@@ -211,6 +226,7 @@
                             {% if data.h2h_col3.details and data.h2h_col3.details.status == 'found' %}
                                 {% set res = data.h2h_col3.details %}
                                 <p><span class="home-color">{{ res.h2h_home_team_name }}</span> <span class="score-value">{{ res.goles_home }}:{{ res.goles_away }}</span> <span class="away-color">{{ res.h2h_away_team_name }}</span></p>
+                                {{ render_match_date(res) }}
                                 <p><b>AH:</b> <span class="ah-value">{{ format_ah(res.handicap) }}</span></p>
                                 {% if data.h2h_col3.stats %}
                                     <h6 class="mt-3 text-muted">Estadísticas</h6>
@@ -253,6 +269,7 @@
                                 {% if data.comp_L_vs_UV_A.details %}
                                     {% set res = data.comp_L_vs_UV_A.details %}
                                     <p>📊 <b>Res:</b> <span class="data-highlight">{{ res.score }}</span> ({{ res.home_team }} vs {{ res.away_team }})</p>
+                                    {{ render_match_date(res) }}
                                     <p>⚖️ <b>AH:</b> <span class="ah-value">{{ format_ah(res.ah_line) }}</span></p>
                                     <p>🏟️ <b>Localía de '{{ data.home_name }}':</b> <span class="data-highlight">{{ res.localia }}</span></p>
                                     {% if data.comp_L_vs_UV_A.stats %}
@@ -272,6 +289,7 @@
                                 {% if data.comp_V_vs_UL_H.details %}
                                     {% set res = data.comp_V_vs_UL_H.details %}
                                     <p>📊 <b>Res:</b> <span class="data-highlight">{{ res.score }}</span> ({{ res.home_team }} vs {{ res.away_team }})</p>
+                                    {{ render_match_date(res) }}
                                     <p>⚖️ <b>AH:</b> <span class="ah-value">{{ format_ah(res.ah_line) }}</span></p>
                                     <p>🏟️ <b>Localía de '{{ data.away_name }}':</b> <span class="data-highlight">{{ res.localia }}</span></p>
                                     {% if data.comp_V_vs_UL_H.stats %}
@@ -306,6 +324,7 @@
                                 {% if data.h2h_stadium.details.res1 != '?:?' %}
                                     {% set res = data.h2h_stadium.details %}
                                     <p><span class="home-color">{{ data.home_name }}</span> <span class="score-value">{{ res.res1 }}</span> <span class="away-color">{{ data.away_name }}</span></p>
+                                    {{ render_match_date(res) }}
                                     <p><b>Handicap Inicial:</b> <span class="ah-value">{{ res.ah1 }}</span></p>
                                     {% if data.h2h_stadium.stats %}
                                         <h6 class="mt-3 text-muted">Estadísticas</h6>
@@ -324,6 +343,7 @@
                                 {% if data.h2h_general.details.res6 != '?:?' %}
                                     {% set res = data.h2h_general.details %}
                                     <p><span class="home-color">{{ res.h2h_gen_home }}</span> <span class="score-value">{{ res.res6 }}</span> <span class="away-color">{{ res.h2h_gen_away }}</span></p>
+                                    {{ render_match_date(res) }}
                                     <p><b>Handicap Inicial:</b> <span class="ah-value">{{ res.ah6 }}</span></p>
                                     {% if data.h2h_general.stats %}
                                         <h6 class="mt-3 text-muted">Estadísticas</h6>

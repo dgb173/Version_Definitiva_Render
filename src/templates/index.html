@@ -97,8 +97,11 @@
         .mini-match.is-draw .result-pill { background:#e2e8f0; color:#475569; }
         .mini-match-teams { display:flex; align-items:center; justify-content:space-between; gap:8px; font-weight:600; }
         .team-chip { flex:1; font-size:0.9rem; color:#475569; }
-        .team-chip.is-focus { color:#111827; font-weight:700; }
-        .score-chip { font-weight:700; color:#111827; min-width:58px; text-align:center; }
+        .team-chip { border-radius:999px; padding:4px 10px; font-size:0.9rem; font-weight:600; }
+        .team-chip.team-main { background:#e0e7ff; color:#1e3a8a; }
+        .team-chip.team-opponent { background:#fff7ed; color:#9a3412; }
+        .team-chip.is-focus { box-shadow:0 0 0 1px rgba(37,99,235,0.25); }
+        .score-chip { font-weight:700; color:#111827; min-width:58px; text-align:center; background:#f1f5f9; border-radius:999px; padding:2px 10px; }
         .mini-match-tags { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; font-size:0.75rem; }
         .handicap-chip { background:#edf2ff; color:#3b5bdb; border-radius:999px; padding:2px 10px; font-weight:600; }
         .role-chip { background:#fff5f5; color:#c2410c; border-radius:999px; padding:2px 10px; font-weight:600; }
@@ -340,6 +343,8 @@
                 let resultClass = 'is-draw';
                 if (result === 'W') resultClass = 'is-win';
                 if (result === 'L') resultClass = 'is-loss';
+                const homeTeamClass = match.is_home ? 'team-chip team-main is-focus' : 'team-chip team-opponent';
+                const awayTeamClass = match.is_home ? 'team-chip team-opponent' : 'team-chip team-main is-focus';
                 return `
                     <div class="mini-match ${resultClass}">
                         <div class="mini-match-meta">
@@ -348,9 +353,9 @@
                             <span class="mini-date">${match.date || ''}</span>
                         </div>
                         <div class="mini-match-teams">
-                            <span class="team-chip ${match.is_home ? 'is-focus' : ''}">${match.home_team || '-'}</span>
+                            <span class="${homeTeamClass}">${match.home_team || '-'}</span>
                             <span class="score-chip">${match.score || '-'}</span>
-                            <span class="team-chip ${match.is_home ? '' : 'is-focus'}">${match.away_team || '-'}</span>
+                            <span class="${awayTeamClass}">${match.away_team || '-'}</span>
                         </div>
                         <div class="mini-match-tags">
                             <span class="handicap-chip">${formatHandicapText(match)}</span>
@@ -377,19 +382,23 @@
                 `;
             };
 
-            const renderFutureMatch = (match) => `
-                <div class="future-card">
-                    <div class="future-head">
-                        <span>${match.league || '-'}</span>
-                        <span>${match.date || ''}</span>
+            const renderFutureMatch = (match) => {
+                const homeTeamClass = match.is_home ? 'team-chip team-main is-focus' : 'team-chip team-opponent';
+                const awayTeamClass = match.is_home ? 'team-chip team-opponent' : 'team-chip team-main is-focus';
+                return `
+                    <div class="future-card">
+                        <div class="future-head">
+                            <span>${match.league || '-'}</span>
+                            <span class="mini-date">${match.date || ''}</span>
+                        </div>
+                        <div class="future-teams">
+                            <span class="${homeTeamClass}">${match.home_team || '-'}</span>
+                            <span class="score-chip">vs</span>
+                            <span class="${awayTeamClass}">${match.away_team || '-'}</span>
+                        </div>
                     </div>
-                    <div class="future-teams">
-                        <span class="team-chip ${match.is_home ? 'is-focus' : ''}">${match.home_team || '-'}</span>
-                        <span class="score-chip">vs</span>
-                        <span class="team-chip ${match.is_home ? '' : 'is-focus'}">${match.away_team || '-'}</span>
-                    </div>
-                </div>
-            `;
+                `;
+            };
 
             const renderFutureColumn = (title, payload) => {
                 const matches = safeArray((payload || {}).matches);
@@ -419,6 +428,8 @@
                 const deltaText = typeof match.delta_vs_current === 'number'
                     ? `<span class="mini-date">Δ actual: ${match.delta_vs_current.toFixed(2)}</span>`
                     : '';
+                const homeTeamClass = match.is_home ? 'team-chip team-main is-focus' : 'team-chip team-opponent';
+                const awayTeamClass = match.is_home ? 'team-chip team-opponent' : 'team-chip team-main is-focus';
                 return `
                     <div class="comparative-row ${resultClass}">
                         <div class="comparative-meta">
@@ -427,9 +438,9 @@
                             ${deltaText}
                         </div>
                         <span class="result-pill">${result || '-'}</span>
-                        <span class="team-chip ${match.is_home ? 'is-focus' : ''}">${match.home_team || '-'}</span>
+                        <span class="${homeTeamClass}">${match.home_team || '-'}</span>
                         <span class="score-chip">${match.score || '-'}</span>
-                        <span class="team-chip ${match.is_home ? '' : 'is-focus'}">${match.away_team || '-'}</span>
+                        <span class="${awayTeamClass}">${match.away_team || '-'}</span>
                         <span class="handicap-chip">${formatHandicapText(match)}</span>
                     </div>
                 `;
