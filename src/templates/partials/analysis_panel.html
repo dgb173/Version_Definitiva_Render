@@ -1,4 +1,4 @@
-﻿<div class="analysis-panel" data-current-match="{{ data.match_id or data.id }}">
+<div class="analysis-panel" data-current-match="{{ data.match_id or data.id }}">
     <style>
         .analysis-panel .home-color { color:#2563eb; font-weight:700; }
         .analysis-panel .away-color { color:#f97316; font-weight:700; }
@@ -252,60 +252,69 @@
             <div id="collapseTwo" class="accordion-collapse collapse show" aria-labelledby="headingTwo" data-bs-parent="#analysisAccordion">
                 <div class="accordion-body">
                     <div class="row">
-                        <!-- Comparativas Indirectas -->
-        <div class="accordion-item">
-            <h2 class="accordion-header" id="headingFour">
-                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFour" aria-expanded="true" aria-controls="collapseFour">
-                    🔄 Comparativas Indirectas Detalladas
-                </button>
-            </h2>
-            <div id="collapseFour" class="accordion-collapse collapse show" aria-labelledby="headingFour" data-bs-parent="#analysisAccordion">
-                <div class="accordion-body">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <div class="card h-100">
-                                <div class="card-header"><h5 class="card-subtitle"><span class="home-color">{{ data.home_name }}</span> vs. últ. rival de <span class="away-color">{{ data.away_name }}</span></h5></div>
-                                <div class="card-body">
-                                {% if data.comp_L_vs_UV_A.details %}
-                                    {% set res = data.comp_L_vs_UV_A.details %}
-                                    <p>📊 <b>Res:</b> <span class="data-highlight">{{ res.score }}</span> ({{ res.home_team }} vs {{ res.away_team }})</p>
-                                    {{ render_match_date(res) }}
-                                    <p>⚖️ <b>AH:</b> <span class="ah-value">{{ format_ah(res.ah_line) }}</span></p>
-                                    <p>🏟️ <b>Localía de '{{ data.home_name }}':</b> <span class="data-highlight">{{ res.localia }}</span></p>
-                                    {% if data.comp_L_vs_UV_A.stats %}
-                                        <h6 class="mt-3 text-muted">Estadísticas</h6>
-                                        <table class="stat-table">
-                                            {{ render_stat_rows(data.comp_L_vs_UV_A.stats) }}
-                                        </table>
+                        <!-- Comparativas Directas -->
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="headingFour">
+                                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFour" aria-expanded="true" aria-controls="collapseFour">
+                                    ⚖️ Comparativas Directas (últimos 5 partidos)
+                                </button>
+                            </h2>
+                            <div id="collapseFour" class="accordion-collapse collapse show" aria-labelledby="headingFour" data-bs-parent="#analysisAccordion">
+                                <div class="accordion-body">
+                                    {% set comps = data.comparativas_directas or [] %}
+                                    {% if comps %}
+                                        {% for comp in comps %}
+                                        <div class="row g-3 mb-4">
+                                            <div class="col-lg-6">
+                                                <div class="card h-100">
+                                                    <div class="card-header"><h5 class="card-subtitle mb-0"><span class="home-color">{{ data.home_name }}</span> vs {{ comp.rival }}</h5></div>
+                                                    <div class="card-body">
+                                                        {% set res = (comp.home.details or {}) %}
+                                                        {% if res %}
+                                                            <p><span class="home-color">{{ res.home_team }}</span> <span class="score-value">{{ res.score }}</span> <span class="away-color">{{ res.away_team }}</span></p>
+                                                            {{ render_match_date(res) }}
+                                                            <p><b>AH:</b> <span class="ah-value">{{ format_ah(res.handicap_line_raw or res.ahLine_raw or '-') }}</span></p>
+                                                            {% if comp.home.stats %}
+                                                                <h6 class="mt-3 text-muted">Estadísticas</h6>
+                                                                <table class="stat-table">
+                                                                    {{ render_stat_rows(comp.home.stats) }}
+                                                                </table>
+                                                            {% endif %}
+                                                        {% else %}
+                                                            <p class="text-muted mb-0">Sin datos para esta comparativa.</p>
+                                                        {% endif %}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-lg-6">
+                                                <div class="card h-100">
+                                                    <div class="card-header"><h5 class="card-subtitle mb-0"><span class="away-color">{{ data.away_name }}</span> vs {{ comp.rival }}</h5></div>
+                                                    <div class="card-body">
+                                                        {% set res = (comp.away.details or {}) %}
+                                                        {% if res %}
+                                                            <p><span class="home-color">{{ res.home_team }}</span> <span class="score-value">{{ res.score }}</span> <span class="away-color">{{ res.away_team }}</span></p>
+                                                            {{ render_match_date(res) }}
+                                                            <p><b>AH:</b> <span class="ah-value">{{ format_ah(res.handicap_line_raw or res.ahLine_raw or '-') }}</span></p>
+                                                            {% if comp.away.stats %}
+                                                                <h6 class="mt-3 text-muted">Estadísticas</h6>
+                                                                <table class="stat-table">
+                                                                    {{ render_stat_rows(comp.away.stats) }}
+                                                                </table>
+                                                            {% endif %}
+                                                        {% else %}
+                                                            <p class="text-muted mb-0">Sin datos para esta comparativa.</p>
+                                                        {% endif %}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% endfor %}
+                                    {% else %}
+                                        <p class="text-muted mb-0">No se encontraron rivales comunes en los últimos encuentros.</p>
                                     {% endif %}
-                                {% else %}<p class="text-muted">Comparativa no disponible.</p>{% endif %}
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <div class="card h-100">
-                                <div class="card-header"><h5 class="card-subtitle"><span class="away-color">{{ data.away_name }}</span> vs. últ. rival de <span class="home-color">{{ data.home_name }}</span></h5></div>
-                                <div class="card-body">
-                                {% if data.comp_V_vs_UL_H.details %}
-                                    {% set res = data.comp_V_vs_UL_H.details %}
-                                    <p>📊 <b>Res:</b> <span class="data-highlight">{{ res.score }}</span> ({{ res.home_team }} vs {{ res.away_team }})</p>
-                                    {{ render_match_date(res) }}
-                                    <p>⚖️ <b>AH:</b> <span class="ah-value">{{ format_ah(res.ah_line) }}</span></p>
-                                    <p>🏟️ <b>Localía de '{{ data.away_name }}':</b> <span class="data-highlight">{{ res.localia }}</span></p>
-                                    {% if data.comp_V_vs_UL_H.stats %}
-                                        <h6 class="mt-3 text-muted">Estadísticas</h6>
-                                        <table class="stat-table">
-                                            {{ render_stat_rows(data.comp_V_vs_UL_H.stats) }}
-                                        </table>
-                                    {% endif %}
-                                {% else %}<p class="text-muted">Comparativa no disponible.</p>{% endif %}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- H2H Directo -->
         <div class="accordion-item">
@@ -381,6 +390,7 @@
         </div>
     </div>
 </div>
+
 
 
 

@@ -848,6 +848,13 @@ def analizar_partido_completo(match_id: str):
         stats_loader=get_stats_rows,
         limit=5,
     )
+    comparativas_directas = _build_comparativas_directas_summary(
+        soup_completo,
+        home_name,
+        away_name,
+        stats_loader=get_stats_rows,
+        limit=5,
+    )
 
     results = {
         "match_id": main_match_id,
