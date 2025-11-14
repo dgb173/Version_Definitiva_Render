@@ -304,11 +304,17 @@ def _extract_row_details(row_element, score_class: str):
         score_cell = cells[3]
         score_span = score_cell.find('span', class_=lambda cls: isinstance(cls, str) and score_class in cls)
         score_text = _normalize_score_text(score_span.get_text(strip=True) if score_span else score_cell.get_text(strip=True))
-        handicap_cell = cells[11] if len(cells) > 11 else None
-        handicap_raw = '-'
-        if handicap_cell:
-            handicap_raw = (handicap_cell.get('data-o') or handicap_cell.get_text(strip=True) or '-').strip() or '-'
-        handicap_numeric = parse_ah_to_number_of(handicap_raw)
+
+        try:
+            handicap_cell = cells[11] if len(cells) > 11 else None
+            handicap_raw = '-'
+            if handicap_cell:
+                handicap_raw = (handicap_cell.get('data-o') or handicap_cell.get_text(strip=True) or '-').strip() or '-'
+            handicap_numeric = parse_ah_to_number_of(handicap_raw)
+        except IndexError:
+            handicap_raw = '-'
+            handicap_numeric = None
+
         return {
             'league': league,
             'date': date_text,

@@ -13,7 +13,7 @@ from urllib3.util.retry import Retry
 import pandas as pd
 
 # --- CONFIGURACIÓN GLOBAL ---
-BASE_URL_OF = "https://live18.nowgoal25.com"
+BASE_URL_OF = "https://live20.nowgoal25.com"
 PLACEHOLDER_NODATA = "*(No disponible)*"
 REQUEST_TIMEOUT_SECONDS = 10
 REQUEST_HEADERS = {
