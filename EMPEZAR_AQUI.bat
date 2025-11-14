@@ -42,18 +42,6 @@ if %errorlevel% neq 0 (
 )
 
 
-echo [INFO] Instalando navegadores para Playwright (esto puede tardar)...
-
-:: Instalar navegadores de Playwright
-py -m playwright install
-
-if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] Ha ocurrido un error instalando los navegadores web.
-    echo.
-    pause
-    exit /b
-)
 
 echo.
 echo [OK] Todas las dependencias se han instalado correctamente.

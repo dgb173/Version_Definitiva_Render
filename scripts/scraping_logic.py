@@ -1,9 +1,9 @@
 
 import asyncio
-from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import datetime
 import re
+import cloudscraper
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -87,7 +87,13 @@ def _get_shared_requests_session():
     global _requests_session
     with _requests_session_lock:
         if _requests_session is None:
-            session = requests.Session()
+            session = cloudscraper.create_scraper(
+                browser={
+                    "browser": "chrome",
+                    "platform": "windows",
+                    "mobile": False,
+                }
+            )
             retries = Retry(total=3, backoff_factor=0.4, status_forcelist=[500, 502, 503, 504])
             adapter = HTTPAdapter(max_retries=retries)
             session.mount("https://", adapter)
@@ -109,37 +115,12 @@ def _fetch_nowgoal_html_sync(url: str) -> str | None:
 
 async def _fetch_nowgoal_html(path: str | None = None, filter_state: int | None = None, requests_first: bool = True) -> str | None:
     target_url = _build_nowgoal_url(path)
-    html_content = None
-
-    if requests_first:
-        try:
-            html_content = await asyncio.to_thread(_fetch_nowgoal_html_sync, target_url)
-        except Exception as exc:
-            print(f"Error asincronico al lanzar la carga con requests ({target_url}): {exc}")
-            html_content = None
-
-    if html_content:
-        return html_content
-
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(4000)
-                if filter_state is not None:
-                    try:
-                        await page.evaluate("(state) => { if (typeof HideByState === 'function') { HideByState(state); } }", filter_state)
-                        await page.wait_for_timeout(1500)
-                    except Exception as eval_err:
-                        print(f"Advertencia al aplicar HideByState({filter_state}) en {target_url}: {eval_err}")
-                return await page.content()
-            finally:
-                await browser.close()
-    except Exception as browser_exc:
-        print(f"Error al obtener la pagina con Playwright ({target_url}): {browser_exc}")
-    return None
+        return await asyncio.to_thread(_fetch_nowgoal_html_sync, target_url)
+    except Exception as exc:
+        print(f"Error asincronico al obtener {target_url}: {exc}")
+        return None
+
 
 def parse_main_page_matches(html_content, limit=20, offset=0, handicap_filter=None, goal_line_filter=None):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -314,3 +295,4 @@ async def get_main_page_finished_matches_async(limit=20, offset=0, handicap_filt
             return []
         matches = parse_main_page_finished_matches(html_content, limit, offset, handicap_filter, goal_line_filter)
     return matches
+

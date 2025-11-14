@@ -2,6 +2,7 @@
 
 import time
 import copy
+import cloudscraper
 import requests
 import re
 import math
@@ -341,7 +342,13 @@ def get_requests_session_of():
     global _requests_session
     with _requests_session_lock:
         if _requests_session is None:
-            session = requests.Session()
+            session = cloudscraper.create_scraper(
+                browser={
+                    "browser": "chrome",
+                    "platform": "windows",
+                    "mobile": False,
+                }
+            )
             retries = Retry(total=3, backoff_factor=0.4, status_forcelist=[500, 502, 503, 504])
             adapter = HTTPAdapter(max_retries=retries, pool_connections=32, pool_maxsize=32)
             session.mount("https://", adapter)
@@ -874,3 +881,4 @@ def analizar_partido_completo(match_id: str):
 
     _set_cached_analysis(main_match_id, results)
     return copy.deepcopy(results)
+

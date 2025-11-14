@@ -13,6 +13,7 @@ import json
 import time
 import logging
 from pathlib import Path
+import cloudscraper
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -234,11 +235,11 @@ def _fetch_match_analysis_soup(match_id: str):
             return BeautifulSoup(html, "lxml")
         except Exception as exc:
             print(f"Error parseando HTML del analisis {match_id}: {exc}")
-    # Fallback a Playwright del Estudio para garantizar los datos del ojito
+    # Fallback a la rutina del Estudio (cloudscraper) para garantizar los datos del ojito
     try:
         return obtener_soup_partido(match_id)
     except Exception as fallback_exc:
-        print(f"Fallback Playwright fallido para {match_id}: {fallback_exc}")
+        print(f"Fallback del Estudio fallido para {match_id}: {fallback_exc}")
         return None
 
 
@@ -637,7 +638,13 @@ def _get_shared_requests_session():
     global _requests_session
     with _requests_session_lock:
         if _requests_session is None:
-            session = requests.Session()
+            session = cloudscraper.create_scraper(
+                browser={
+                    "browser": "chrome",
+                    "platform": "windows",
+                    "mobile": False,
+                }
+            )
             retries = Retry(total=3, backoff_factor=0.4, status_forcelist=[500, 502, 503, 504])
             adapter = HTTPAdapter(max_retries=retries)
             session.mount("https://", adapter)
@@ -1434,5 +1441,4 @@ def start_analysis_background():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True) # debug=True es útil para desarrollar
-
 

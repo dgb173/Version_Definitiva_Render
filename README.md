@@ -18,7 +18,7 @@ Este proyecto está configurado para un despliegue robusto y sencillo en Render 
 
 Este proyecto utiliza un **`Dockerfile`** para crear un entorno de ejecución personalizado. Esto resuelve todos los problemas de dependencias que encontramos.
 
--   **Entorno Personalizado**: El `Dockerfile` le dice a Render que use una imagen base oficial de Playwright. Esta imagen ya incluye **todas las librerías de sistema** que `Chrome` necesita para funcionar, garantizando que el scraping del "Estudio" no falle.
+-   **Entorno Personalizado**: El `Dockerfile` parte de la imagen `python:3.11-slim` y solo instala las librerias del sistema necesarias. `cloudscraper` se encarga de desbloquear NowGoal sin navegadores.
 -   **Configuración de Render**: El fichero `render.yaml` ha sido simplificado. Ahora simplemente le dice a Render que construya la aplicación usando el `Dockerfile` y la inicie.
 -   **Lógica de la App**: La aplicación sigue leyendo los partidos desde `data.json`, y solo hace scraping en vivo para los análisis detallados, como querías.
 
