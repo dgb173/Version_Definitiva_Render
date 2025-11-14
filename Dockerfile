@@ -9,6 +9,16 @@ COPY requirements.txt .
 
 # Install Python dependencies
 # We don't need 'playwright install' because the browsers are already in the image
+RUN apt-get update && apt-get install -y \
+    libgtk-4-1 \
+    libgraphene-1.0-0 \
+    gstreamer1.0-plugins-base \
+    libenchant-2-2 \
+    libsecret-1-0 \
+    libmanette-0.2-0 \
+    libgles2 \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
