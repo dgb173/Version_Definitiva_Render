@@ -11,18 +11,15 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from playwright.sync_api import (
+    sync_playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    Error as PlaywrightError,
+)
 
 # --- CONFIGURACIÓN GLOBAL ---
 BASE_URL_OF = "https://live18.nowgoal25.com"
-SELENIUM_TIMEOUT_SECONDS_OF = 10
+BROWSER_TIMEOUT_SECONDS = 10
 PLACEHOLDER_NODATA = "*(No disponible)*"
 REQUEST_TIMEOUT_SECONDS = 10
 REQUEST_HEADERS = {
@@ -45,9 +42,10 @@ _stats_cache_lock = threading.Lock()
 _analysis_cache = {}
 _analysis_cache_lock = threading.Lock()
 _STATS_NOT_FOUND = object()
-_driver_instance = None
-_driver_instance_lock = threading.Lock()
-_driver_use_lock = threading.Lock()
+_playwright_instance = None
+_browser_instance = None
+_browser_lock = threading.Lock()
+_browser_use_lock = threading.Lock()
 
 def _read_cache(cache_dict, key, ttl_seconds, lock):
     with lock:
@@ -420,21 +418,23 @@ def get_rival_b_for_original_h2h_of(soup, league_id=None):
                 return key_id, rival_id_match.group(1), rival_tag.text.strip()
     return None, None, None
 
-def get_h2h_details_for_original_logic_of(driver, key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
-    if not all([driver, key_match_id, rival_a_id, rival_b_id]):
+def get_h2h_details_for_original_logic_of(page, key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
+    if not all([page, key_match_id, rival_a_id, rival_b_id]):
         return {"status": "error", "resultado": "N/A (Datos incompletos para H2H)"}
     url = f"{BASE_URL_OF}/match/h2h-{key_match_id}"
     try:
-        driver.get(url)
-        WebDriverWait(driver, SELENIUM_TIMEOUT_SECONDS_OF).until(EC.presence_of_element_located((By.ID, "table_v2")))
+        page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
+        page.wait_for_selector("#table_v2", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
         try:
-            select = Select(WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "hSelect_2"))))
-            select.select_by_value("8")
-            time.sleep(0.5)
-        except TimeoutException: pass
-        soup = BeautifulSoup(driver.page_source, "lxml")
-    except Exception as e:
-        return {"status": "error", "resultado": f"N/A (Error Selenium en H2H Col3: {type(e).__name__})"}
+            page.select_option("#hSelect_2", value="8")
+            page.wait_for_timeout(500)
+        except PlaywrightTimeoutError:
+            pass
+        soup = BeautifulSoup(page.content(), "lxml")
+    except PlaywrightTimeoutError:
+        return {"status": "error", "resultado": "N/A (Timeout al cargar H2H Col3)"}
+    except PlaywrightError as e:
+        return {"status": "error", "resultado": f"N/A (Error Playwright en H2H Col3: {type(e).__name__})"}
     if not (table := soup.find("table", id="table_v2")):
         return {"status": "error", "resultado": "N/A (Tabla H2H Col3 no encontrada)"}
     for row in table.find_all("tr", id=re.compile(r"tr2_\d+")):
@@ -721,75 +721,103 @@ def _build_comparativas_directas_summary(soup, home_name, away_name, stats_loade
     return results
 
 
-def _load_main_match_soup(driver, main_match_id: str):
+def _load_main_match_soup(page, main_match_id: str):
+    if not page:
+        return None
     main_page_url = f"{BASE_URL_OF}/match/h2h-{main_match_id}"
-    driver.get(main_page_url)
-    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "table_v1")))
+    try:
+        page.goto(main_page_url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
+        page.wait_for_timeout(500)
+    except PlaywrightTimeoutError:
+        print(f"Timeout al cargar la pagina principal del partido {main_match_id}")
+        return None
+    except PlaywrightError as exc:
+        print(f"Error de Playwright al cargar el partido {main_match_id}: {exc}")
+        return None
+
     for select_id in ["hSelect_1", "hSelect_2", "hSelect_3"]:
         try:
-            Select(WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.ID, select_id)))).select_by_value("8")
-            time.sleep(0.1)
-        except TimeoutException:
+            page.select_option(f"#{select_id}", value="8")
+            page.wait_for_timeout(100)
+        except PlaywrightTimeoutError:
             continue
-    return BeautifulSoup(driver.page_source, "lxml")
+        except PlaywrightError:
+            continue
+
+    return BeautifulSoup(page.content(), "lxml")
 
 
-def _build_selenium_options():
-    options = ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-logging")
-    options.add_argument("--log-level=3")
-    options.add_argument("--blink-settings=imagesEnabled=false")
-    options.add_argument(f"user-agent={REQUEST_HEADERS['User-Agent']}")
-    return options
-
-
-def _reset_selenium_driver():
-    global _driver_instance
-    with _driver_instance_lock:
-        if _driver_instance is not None:
+def _reset_playwright_browser():
+    global _playwright_instance, _browser_instance
+    with _browser_lock:
+        if _browser_instance is not None:
             try:
-                _driver_instance.quit()
+                _browser_instance.close()
             except Exception:
                 pass
-            _driver_instance = None
-
-
-def _get_or_create_selenium_driver():
-    global _driver_instance
-    with _driver_instance_lock:
-        if _driver_instance is None:
+            _browser_instance = None
+        if _playwright_instance is not None:
             try:
-                service = ChromeService(ChromeDriverManager().install())
-                _driver_instance = webdriver.Chrome(service=service, options=_build_selenium_options())
-            except WebDriverException as exc:
-                print(f"Error inicializando Selenium driver: {exc}")
-                # Intento de fallback sin webdriver-manager, por si acaso
-                try:
-                    _driver_instance = webdriver.Chrome(options=_build_selenium_options())
-                except Exception as final_exc:
-                    print(f"Fallo el intento de fallback de Selenium: {final_exc}")
-                    _driver_instance = None
-        return _driver_instance
+                _playwright_instance.stop()
+            except Exception:
+                pass
+            _playwright_instance = None
+
+
+def _get_or_create_browser():
+    global _playwright_instance, _browser_instance
+    with _browser_lock:
+        if _playwright_instance is None:
+            try:
+                _playwright_instance = sync_playwright().start()
+            except Exception as exc:
+                print(f"No se pudo iniciar Playwright: {exc}")
+                _playwright_instance = None
+        if _playwright_instance and _browser_instance is None:
+            launch_args = [
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-extensions",
+                "--window-size=1920,1080",
+                "--disable-logging",
+                "--log-level=3",
+                "--blink-settings=imagesEnabled=false",
+            ]
+            try:
+                _browser_instance = _playwright_instance.chromium.launch(
+                    headless=True,
+                    args=launch_args,
+                    chromium_sandbox=False,
+                )
+            except Exception as exc:
+                print(f"No se pudo lanzar el navegador de Playwright: {exc}")
+                _browser_instance = None
+        return _browser_instance
 
 
 @contextmanager
-def managed_selenium_driver():
-    driver = _get_or_create_selenium_driver()
-    if not driver:
+def managed_playwright_page():
+    browser = _get_or_create_browser()
+    if not browser:
         yield None
         return
-    with _driver_use_lock:
+    with _browser_use_lock:
+        page = browser.new_page(user_agent=REQUEST_HEADERS["User-Agent"])
         try:
-            yield driver
-        except WebDriverException:
-            _reset_selenium_driver()
+            page.set_viewport_size({"width": 1920, "height": 1080})
+        except Exception:
+            pass
+        try:
+            yield page
+        except PlaywrightError:
+            _reset_playwright_browser()
             raise
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
 
 def analizar_partido_completo(match_id: str):
     main_match_id = "".join(filter(str.isdigit, str(match_id)))
@@ -802,10 +830,12 @@ def analizar_partido_completo(match_id: str):
 
     start_time = time.time()
     try:
-        with managed_selenium_driver() as driver:
-            if not driver:
-                return {"error": "No se pudo inicializar el WebDriver."}
-            soup_completo = _load_main_match_soup(driver, main_match_id)
+        with managed_playwright_page() as page:
+            if not page:
+                return {"error": "No se pudo inicializar el navegador para el Estudio."}
+            soup_completo = _load_main_match_soup(page, main_match_id)
+            if soup_completo is None:
+                return {"error": "No se pudo cargar la página de análisis del partido."}
             home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
             home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
             away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
@@ -821,7 +851,7 @@ def analizar_partido_completo(match_id: str):
             main_match_odds_data = extract_bet365_initial_odds_of(soup_completo)
             final_score, _ = extract_final_score_of(soup_completo)
             details_h2h_col3 = get_h2h_details_for_original_logic_of(
-                driver, key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
+                page, key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
             )
     except Exception as exc:
         return {"error": f"Error durante el análisis: {exc}"}
