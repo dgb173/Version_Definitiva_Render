@@ -7,6 +7,7 @@ import re
 import math
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -474,6 +475,55 @@ def get_team_league_info_from_script_of(soup):
     league_name = find_val(r"lName:\s*'([^']*)'") or "N/A"
     return home_id, away_id, league_id, home_name, away_name, league_name
 
+def get_match_datetime_from_script_of(soup):
+    """
+    Extrae fecha y hora del script _matchInfo si existe.
+    """
+    result = {"match_date": None, "match_time": None, "match_datetime": None}
+    if not soup:
+        return result
+    try:
+        script_tag = soup.find("script", string=re.compile(r"var _matchInfo = "))
+        if not (script_tag and script_tag.string):
+            return result
+        content = script_tag.string
+
+        def find_val(pattern):
+            match = re.search(pattern, content)
+            return match.group(1) if match else None
+
+        match_time_txt = find_val(r"matchTime:\s*'([^']+)'")
+        start_date = find_val(r"startDate:\s*'([^']+)'")
+        door_time = find_val(r"doorTime:\s*'([^']+)'")
+
+        normalized_date = None
+        normalized_time = None
+
+        if match_time_txt:
+            for fmt in ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M"):
+                try:
+                    dt = datetime.strptime(match_time_txt, fmt)
+                    normalized_date = dt.strftime("%Y-%m-%d")
+                    normalized_time = dt.strftime("%H:%M")
+                    break
+                except Exception:
+                    continue
+
+        if not normalized_date and start_date:
+            normalized_date = start_date
+            if door_time:
+                m = re.match(r"(\d{2}):(\d{2})", door_time)
+                if m:
+                    normalized_time = f"{m.group(1)}:{m.group(2)}"
+
+        if normalized_date:
+            result["match_date"] = normalized_date
+            result["match_time"] = normalized_time
+            result["match_datetime"] = f"{normalized_date} {normalized_time}".strip()
+    except Exception:
+        return result
+    return result
+
 def _parse_date_ddmmyyyy(d: str) -> tuple:
     m = re.search(r'(\d{2})-(\d{2})-(\d{4})', d or '')
     return (int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else (1900, 1, 1)
@@ -837,6 +887,7 @@ def analizar_partido_completo(match_id: str):
             if soup_completo is None:
                 return {"error": "No se pudo cargar la página de análisis del partido."}
             home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
+            dt_info = get_match_datetime_from_script_of(soup_completo)
             home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
             away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
             home_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'home')
@@ -878,20 +929,18 @@ def analizar_partido_completo(match_id: str):
         stats_loader=get_stats_rows,
         limit=5,
     )
-    comparativas_directas = _build_comparativas_directas_summary(
-        soup_completo,
-        home_name,
-        away_name,
-        stats_loader=get_stats_rows,
-        limit=5,
-    )
-
     results = {
         "match_id": main_match_id,
         "home_name": home_name,
         "away_name": away_name,
         "league_name": league_name,
         "final_score": final_score,
+        "score": final_score,
+        "match_date": dt_info.get("match_date"),
+        "match_time": dt_info.get("match_time"),
+        "match_datetime": dt_info.get("match_datetime"),
+        "main_match_odds_data": main_match_odds_data,
+        "h2h_data": h2h_data,
         "home_standings": home_standings,
         "away_standings": away_standings,
         "home_ou_stats": home_ou_stats,
