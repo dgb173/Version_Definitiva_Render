@@ -6,21 +6,14 @@ import requests
 import re
 import math
 import threading
-from contextlib import contextmanager
 from datetime import datetime
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import pandas as pd
-from playwright.sync_api import (
-    sync_playwright,
-    TimeoutError as PlaywrightTimeoutError,
-    Error as PlaywrightError,
-)
 
 # --- CONFIGURACIÓN GLOBAL ---
 BASE_URL_OF = "https://live18.nowgoal25.com"
-BROWSER_TIMEOUT_SECONDS = 10
 PLACEHOLDER_NODATA = "*(No disponible)*"
 REQUEST_TIMEOUT_SECONDS = 10
 REQUEST_HEADERS = {
@@ -43,11 +36,6 @@ _stats_cache_lock = threading.Lock()
 _analysis_cache = {}
 _analysis_cache_lock = threading.Lock()
 _STATS_NOT_FOUND = object()
-_playwright_instance = None
-_browser_instance = None
-_browser_lock = threading.Lock()
-_browser_use_lock = threading.Lock()
-
 def _read_cache(cache_dict, key, ttl_seconds, lock):
     with lock:
         entry = cache_dict.get(key)
@@ -419,23 +407,14 @@ def get_rival_b_for_original_h2h_of(soup, league_id=None):
                 return key_id, rival_id_match.group(1), rival_tag.text.strip()
     return None, None, None
 
-def get_h2h_details_for_original_logic_of(page, key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
-    if not all([page, key_match_id, rival_a_id, rival_b_id]):
+def get_h2h_details_for_original_logic_of(key_match_id, rival_a_id, rival_b_id, rival_a_name="Rival A", rival_b_name="Rival B"):
+    if not all([key_match_id, rival_a_id, rival_b_id]):
         return {"status": "error", "resultado": "N/A (Datos incompletos para H2H)"}
     url = f"{BASE_URL_OF}/match/h2h-{key_match_id}"
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
-        page.wait_for_selector("#table_v2", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
-        try:
-            page.select_option("#hSelect_2", value="8")
-            page.wait_for_timeout(500)
-        except PlaywrightTimeoutError:
-            pass
-        soup = BeautifulSoup(page.content(), "lxml")
-    except PlaywrightTimeoutError:
-        return {"status": "error", "resultado": "N/A (Timeout al cargar H2H Col3)"}
-    except PlaywrightError as e:
-        return {"status": "error", "resultado": f"N/A (Error Playwright en H2H Col3: {type(e).__name__})"}
+    html = _fetch_nowgoal_html_sync(url)
+    if not html:
+        return {"status": "error", "resultado": "N/A (No se pudo descargar H2H Col3)"}
+    soup = BeautifulSoup(html, "lxml")
     if not (table := soup.find("table", id="table_v2")):
         return {"status": "error", "resultado": "N/A (Tabla H2H Col3 no encontrada)"}
     for row in table.find_all("tr", id=re.compile(r"tr2_\d+")):
@@ -453,9 +432,14 @@ def get_h2h_details_for_original_logic_of(page, key_match_id, rival_a_id, rival_
             if len(tds) > 11:
                 cell = tds[11]
                 handicap_raw = (cell.get("data-o") or cell.text).strip() or "N/A"
+            date_span = row.find("span", attrs={'name': 'timeData'})
+            match_date = date_span.get_text(strip=True) if date_span else ''
             return {
                 "status": "found", "goles_home": g_h.strip(), "goles_away": g_a.strip(),
-                "handicap": handicap_raw, "match_id": row.get('index'),
+                "handicap": handicap_raw,
+                "handicap_line_raw": handicap_raw,
+                "match_id": row.get('index'),
+                "date": match_date,
                 "h2h_home_team_name": links[0].text.strip(), "h2h_away_team_name": links[1].text.strip()
             }
     return {"status": "not_found", "resultado": f"H2H directo no encontrado para {rival_a_name} vs {rival_b_name}."}
@@ -771,103 +755,31 @@ def _build_comparativas_directas_summary(soup, home_name, away_name, stats_loade
     return results
 
 
-def _load_main_match_soup(page, main_match_id: str):
-    if not page:
+def _load_main_match_soup(main_match_id: str):
+    normalized_id = "".join(filter(str.isdigit, str(main_match_id or "")))
+    if not normalized_id:
         return None
-    main_page_url = f"{BASE_URL_OF}/match/h2h-{main_match_id}"
+    main_page_url = f"{BASE_URL_OF}/match/h2h-{normalized_id}"
+    html = _fetch_nowgoal_html_sync(main_page_url)
+    if not html:
+        return None
     try:
-        page.goto(main_page_url, wait_until="domcontentloaded", timeout=BROWSER_TIMEOUT_SECONDS * 1000)
-        page.wait_for_timeout(500)
-    except PlaywrightTimeoutError:
-        print(f"Timeout al cargar la pagina principal del partido {main_match_id}")
-        return None
-    except PlaywrightError as exc:
-        print(f"Error de Playwright al cargar el partido {main_match_id}: {exc}")
+        return BeautifulSoup(html, "lxml")
+    except Exception as exc:
+        print(f"Error al parsear la pagina principal {normalized_id}: {exc}")
         return None
 
-    for select_id in ["hSelect_1", "hSelect_2", "hSelect_3"]:
-        try:
-            page.select_option(f"#{select_id}", value="8")
-            page.wait_for_timeout(100)
-        except PlaywrightTimeoutError:
-            continue
-        except PlaywrightError:
-            continue
 
-    return BeautifulSoup(page.content(), "lxml")
-
-
-def _reset_playwright_browser():
-    global _playwright_instance, _browser_instance
-    with _browser_lock:
-        if _browser_instance is not None:
-            try:
-                _browser_instance.close()
-            except Exception:
-                pass
-            _browser_instance = None
-        if _playwright_instance is not None:
-            try:
-                _playwright_instance.stop()
-            except Exception:
-                pass
-            _playwright_instance = None
-
-
-def _get_or_create_browser():
-    global _playwright_instance, _browser_instance
-    with _browser_lock:
-        if _playwright_instance is None:
-            try:
-                _playwright_instance = sync_playwright().start()
-            except Exception as exc:
-                print(f"No se pudo iniciar Playwright: {exc}")
-                _playwright_instance = None
-        if _playwright_instance and _browser_instance is None:
-            launch_args = [
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-extensions",
-                "--window-size=1920,1080",
-                "--disable-logging",
-                "--log-level=3",
-                "--blink-settings=imagesEnabled=false",
-            ]
-            try:
-                _browser_instance = _playwright_instance.chromium.launch(
-                    headless=True,
-                    args=launch_args,
-                    chromium_sandbox=False,
-                )
-            except Exception as exc:
-                print(f"No se pudo lanzar el navegador de Playwright: {exc}")
-                _browser_instance = None
-        return _browser_instance
-
-
-@contextmanager
-def managed_playwright_page():
-    browser = _get_or_create_browser()
-    if not browser:
-        yield None
-        return
-    with _browser_use_lock:
-        page = browser.new_page(user_agent=REQUEST_HEADERS["User-Agent"])
-        try:
-            page.set_viewport_size({"width": 1920, "height": 1080})
-        except Exception:
-            pass
-        try:
-            yield page
-        except PlaywrightError:
-            _reset_playwright_browser()
-            raise
-        finally:
-            try:
-                page.close()
-            except Exception:
-                pass
+def obtener_soup_partido(main_match_id: str):
+    """
+    Devuelve el BeautifulSoup principal de la p�gina H2H para un partido concreto
+    usando la misma rutina de peticiones del Estudio.
+    """
+    try:
+        return _load_main_match_soup(main_match_id)
+    except Exception as exc:
+        print(f"Error al obtener el HTML del partido {main_match_id}: {exc}")
+        return None
 
 def analizar_partido_completo(match_id: str):
     main_match_id = "".join(filter(str.isdigit, str(match_id)))
@@ -879,33 +791,32 @@ def analizar_partido_completo(match_id: str):
         return cached_payload
 
     start_time = time.time()
+    soup_completo = _load_main_match_soup(main_match_id)
+    if soup_completo is None:
+        return {"error": "No se pudo cargar la página de análisis del partido."}
+
     try:
-        with managed_playwright_page() as page:
-            if not page:
-                return {"error": "No se pudo inicializar el navegador para el Estudio."}
-            soup_completo = _load_main_match_soup(page, main_match_id)
-            if soup_completo is None:
-                return {"error": "No se pudo cargar la página de análisis del partido."}
-            home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
-            dt_info = get_match_datetime_from_script_of(soup_completo)
-            home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
-            away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
-            home_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'home')
-            away_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'away')
-            key_match_id_rival_a, rival_a_id, rival_a_name = get_rival_a_for_original_h2h_of(soup_completo, league_id)
-            _, rival_b_id, rival_b_name = get_rival_b_for_original_h2h_of(soup_completo, league_id)
-            last_home_match = extract_last_match_in_league_of(soup_completo, "table_v1", home_name, league_id, True)
-            last_away_match = extract_last_match_in_league_of(soup_completo, "table_v2", away_name, league_id, False)
-            h2h_data = extract_h2h_data_of(soup_completo, home_name, away_name, None)
-            comp_L_vs_UV_A = extract_comparative_match_of(soup_completo, "table_v1", home_name, (last_away_match or {}).get('home_team'), league_id, True)
-            comp_V_vs_UL_H = extract_comparative_match_of(soup_completo, "table_v2", away_name, (last_home_match or {}).get('away_team'), league_id, False)
-            main_match_odds_data = extract_bet365_initial_odds_of(soup_completo)
-            final_score, _ = extract_final_score_of(soup_completo)
-            details_h2h_col3 = get_h2h_details_for_original_logic_of(
-                page, key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
-            )
+        home_id, away_id, league_id, home_name, away_name, league_name = get_team_league_info_from_script_of(soup_completo)
+        dt_info = get_match_datetime_from_script_of(soup_completo)
+        home_standings = extract_standings_data_from_h2h_page_of(soup_completo, home_name)
+        away_standings = extract_standings_data_from_h2h_page_of(soup_completo, away_name)
+        home_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'home')
+        away_ou_stats = extract_over_under_stats_from_div_of(soup_completo, 'away')
+        key_match_id_rival_a, rival_a_id, rival_a_name = get_rival_a_for_original_h2h_of(soup_completo, league_id)
+        _, rival_b_id, rival_b_name = get_rival_b_for_original_h2h_of(soup_completo, league_id)
+        last_home_match = extract_last_match_in_league_of(soup_completo, "table_v1", home_name, league_id, True)
+        last_away_match = extract_last_match_in_league_of(soup_completo, "table_v2", away_name, league_id, False)
+        h2h_data = extract_h2h_data_of(soup_completo, home_name, away_name, None)
+        comp_L_vs_UV_A = extract_comparative_match_of(soup_completo, "table_v1", home_name, (last_away_match or {}).get('home_team'), league_id, True)
+        comp_V_vs_UL_H = extract_comparative_match_of(soup_completo, "table_v2", away_name, (last_home_match or {}).get('away_team'), league_id, False)
+        main_match_odds_data = extract_bet365_initial_odds_of(soup_completo)
+        final_score, _ = extract_final_score_of(soup_completo)
+        details_h2h_col3 = get_h2h_details_for_original_logic_of(
+            key_match_id_rival_a, rival_a_id, rival_b_id, rival_a_name, rival_b_name
+        )
     except Exception as exc:
         return {"error": f"Error durante el análisis: {exc}"}
+
 
     market_analysis_html = generar_analisis_completo_mercado(main_match_odds_data, h2h_data, home_name, away_name)
 

@@ -4,7 +4,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flask import Flask, render_template, abort, request, redirect, url_for
 import asyncio
-from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import datetime
 import re
@@ -24,7 +23,8 @@ from modules.estudio_scraper import (
     format_ah_as_decimal_string_of,
     parse_ah_to_number_of,
     check_handicap_cover,
-    generar_analisis_completo_mercado
+    generar_analisis_completo_mercado,
+    obtener_soup_partido
 )
 from flask import jsonify # Asegúrate de que jsonify está importado
 
@@ -229,11 +229,16 @@ def _fetch_match_analysis_soup(match_id: str):
     url_path = f"match/h2h-{match_id}"
     target_url = _build_nowgoal_url(url_path)
     html = _fetch_nowgoal_html_sync(target_url)
-    if not html:
-        return None
+    if html:
+        try:
+            return BeautifulSoup(html, "lxml")
+        except Exception as exc:
+            print(f"Error parseando HTML del analisis {match_id}: {exc}")
+    # Fallback a Playwright del Estudio para garantizar los datos del ojito
     try:
-        return BeautifulSoup(html, "lxml")
-    except Exception:
+        return obtener_soup_partido(match_id)
+    except Exception as fallback_exc:
+        print(f"Fallback Playwright fallido para {match_id}: {fallback_exc}")
         return None
 
 
@@ -667,25 +672,6 @@ async def _fetch_nowgoal_html(path: str | None = None, filter_state: int | None 
 
     if html_content:
         return html_content
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(4000)
-                if filter_state is not None:
-                    try:
-                        await page.evaluate("(state) => { if (typeof HideByState === 'function') { HideByState(state); } }", filter_state)
-                        await page.wait_for_timeout(1500)
-                    except Exception as eval_err:
-                        print(f"Advertencia al aplicar HideByState({filter_state}) en {target_url}: {eval_err}")
-                return await page.content()
-            finally:
-                await browser.close()
-    except Exception as browser_exc:
-        print(f"Error al obtener la pagina con Playwright ({target_url}): {browser_exc}")
     return None
 
 def _parse_number_clean(s: str):
@@ -1233,7 +1219,9 @@ def api_analisis(match_id):
         }
         
         # --- START COVERAGE CALCULATION ---
-        main_odds = datos.get("main_match_odds_data")
+        main_odds = datos.get("main_match_odds_data") or {}
+        if not isinstance(main_odds, dict):
+            main_odds = {}
         home_name = datos.get("home_name")
         away_name = datos.get("away_name")
         ah_actual_num = parse_ah_to_number_of(main_odds.get('ah_linea_raw', ''))
