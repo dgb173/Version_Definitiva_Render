@@ -86,11 +86,14 @@
     {% macro render_match_date(entry, label='Fecha del partido') -%}
         {% if entry %}
             {% set fields = ['match_datetime','match_date','date','date_text','match_time','time','date_attr'] %}
+            {% set found = namespace(value=false) %}
             {% for field in fields %}
-                {% set value = attribute(entry, field) %}
-                {% if value %}
-                    <p class="text-muted small mb-2">{{ label }}: {{ value }}</p>
-                    {% break %}
+                {% if not found.value %}
+                    {% set value = attribute(entry, field) %}
+                    {% if value %}
+                        <p class="text-muted small mb-2">{{ label }}: {{ value }}</p>
+                        {% set found.value = true %}
+                    {% endif %}
                 {% endif %}
             {% endfor %}
         {% endif %}
