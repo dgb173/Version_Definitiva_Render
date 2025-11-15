@@ -1,0 +1,19 @@
+# Resumen de Cambios Realizados
+
+## 1. Arreglo del Análisis Profundo
+- El módulo `src/modules/estudio_scraper.py` ahora incluye la rutina `_fetch_nowgoal_html_sync` (línea 361) que usa `cloudscraper`, caché en memoria (45 s) y un candado `_requests_fetch_lock` para evitar peticiones simultáneas.
+- `get_h2h_details_for_original_logic_of` y `_load_main_match_soup` consumen esa rutina con claves de caché (`h2h-col3:<id>` y `h2h-main:<id>`), garantizando que el scraper siempre obtenga HTML válido en Render/local sin Selenium.
+- `get_requests_session_of` y el resto del scraper siguen compartiendo sesión, por lo que el botón de “Análisis Profundo” vuelve a funcionar y las rutas `/api/preview` y `/api/analisis` operan con la misma fuente de datos.
+
+## 2. Documentación y uso Local
+- `README.md` incluye una sección “Uso local y Análisis Profundo” con los comandos para:
+  1. Crear y activar un entorno virtual (`py -3 -m venv .venv`).
+  2. Instalar dependencias con `pip install -r requirements.txt`.
+  3. Levantar la app con `py -3 src/app.py`.
+  4. Probar el endpoint `http://127.0.0.1:5000/api/analisis/<match_id>`.
+- Se recuerda que `modules/estudio_scraper.py` mantiene un caché corto y usa `cloudscraper`, por lo que no requiere navegadores en Render ni en local.
+
+## 3. Notas Operativas
+- Para refrescar `data.json`, ejecutar `py scripts/run_scraper.py`.
+- El proyecto está listo para Render (usa Docker + requirements) y también funciona localmente con el mismo flujo.
+- No se ejecutaron tests automáticos (el README original lo desaconseja); se recomienda probar manualmente `/api/analisis/<match_id>` tras levantar la app.
