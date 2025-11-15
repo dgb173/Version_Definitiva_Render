@@ -65,3 +65,30 @@ El flujo para actualizar los partidos no cambia:
     ```
 
 3.  **Despliegue Automático**: Render detectará los cambios y redesplegará la aplicación automáticamente con la nueva lista de partidos.
+## Uso local y Análisis Profundo
+
+Puedes levantar el proyecto en local para comprobar que el botón de análisis profundo funciona. El scraper usa `cloudscraper` con caché integrado, por lo que no necesitas Selenium ni navegadores.
+
+1.  **Crear entorno (opcional pero recomendable)**:
+    ```powershell
+    py -3 -m venv .venv
+    .\.venv\Scripts\activate
+    ```
+2.  **Instalar dependencias**:
+    ```powershell
+    pip install -r requirements.txt
+    ```
+3.  **Iniciar la app Flask** (carga `src/app.py`, donde viven `/api/preview` y `/api/analisis`):
+    ```powershell
+    py -3 src/app.py
+    ```
+4.  **Probar el análisis profundo**:
+    - Entra en `http://127.0.0.1:5000` y usa el botón del panel.
+    - O llama directo a `http://127.0.0.1:5000/api/analisis/<match_id>` para obtener el JSON/HTML del estudio.
+
+Si necesitas refrescar `data.json`, ejecuta:
+```powershell
+py scripts/run_scraper.py
+```
+
+> `modules/estudio_scraper.py` mantiene un caché corto (45 s) y comparte sesión `cloudscraper`, así que los análisis consecutivos se sirven rápido incluso sin internet de alta velocidad. Asegúrate de correr los comandos desde la carpeta raíz del repo para que las rutas relativas funcionen.
