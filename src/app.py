@@ -1068,18 +1068,30 @@ def mostrar_estudio(match_id):
     upcoming_matches = (dataset.get('upcoming_matches') or [])[:20]
     finished_matches = (dataset.get('finished_matches') or [])[:20]
 
-    requested_match_id = match_id or request.args.get('match_id')
     target_match_id = requested_match_id or _select_default_match_id(upcoming_matches, finished_matches)
 
     if not target_match_id:
         abort(404, description='No hay partidos disponibles para analizar.')
 
-    datos_partido = analizar_partido_completo(target_match_id)
+    error_message = None
+    datos_partido = {}
+    try:
+        datos_partido = analizar_partido_completo(target_match_id)
+        if not datos_partido or "error" in datos_partido:
+            error_message = (datos_partido or {}).get('error', 'Error desconocido al analizar el partido.')
+            print(f"Error al obtener datos para {target_match_id}: {error_message}")
+    except Exception as e:
+        error_message = f"Excepción inesperada durante el análisis: {e}"
+        print(f"Excepción al obtener datos para {target_match_id}: {error_message}")
 
-    if not datos_partido or "error" in datos_partido:
-        error_message = (datos_partido or {}).get('error', 'Error desconocido')
-        print(f"Error al obtener datos para {target_match_id}: {error_message}")
-        abort(500, description=error_message)
+    if error_message:
+        return render_template(
+            'estudio.html',
+            error=error_message,
+            upcoming_matches=upcoming_matches,
+            finished_matches=finished_matches,
+            selected_match_id=target_match_id
+        )
 
     datos_partido['match_id'] = target_match_id
     print(f"Datos obtenidos para {datos_partido['home_name']} vs {datos_partido['away_name']}. Renderizando plantilla...")

@@ -140,7 +140,18 @@
 
         <main class="content">
             <div id="analysis-panel-wrapper" data-current-match="{{ selected_match_id }}">
-                {% include 'partials/analysis_panel.html' %}
+                {% if error %}
+                    <div class="container mt-4">
+                        <div class="alert alert-danger">
+                            <h4>Error al Analizar el Partido</h4>
+                            <p>Lo sentimos, se produjo un error al intentar obtener los datos para el partido con ID <strong>{{ selected_match_id }}</strong>.</p>
+                            <hr>
+                            <p class="mb-0"><strong>Detalle del error:</strong> {{ error }}</p>
+                        </div>
+                    </div>
+                {% else %}
+                    {% include 'partials/analysis_panel.html' %}
+                {% endif %}
             </div>
         </main>
     </div>
