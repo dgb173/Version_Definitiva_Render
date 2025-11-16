@@ -1,0 +1,61 @@
+Tarea: Arreglar extracción de handicaps en la app (Vista rápida / Estudio).
+Repositorio: Version_Definitiva_Render (Python/Flask). Archivos clave:
+- src/app.py  (vista rápida / ojito)
+- src/modules/estudio_scraper.py (scraping/estudio)
+- Plantilla: src/templates/index.html (vista rápida)
+
+Problema actual:
+- El handicap aparece como “-” aunque en el HTML está. Código asume índice fijo cells[11] para la celda de handicap. Con cambios en la tabla (colspan, menos columnas) ese índice no apunta al handicap.
+- Parser de handicap no reconoce valores textuales (“pk”, “pick”, “平手”, “平/半”), devolviendo “-”.
+
+HTML observado (html_extraer/analisis.txt):
+- Tablas table_v1 y table_v2. Las celdas de handicap tienen atributo data-o con valores como “-1.5”, “0.5/1”, “-0.5”, etc.
+- Encabezados: 17 th con dos “AH”. La posición puede variar.
+
+Qué hacer:
+1) Extracción robusta de handicap (aplicar en:
+   - src/app.py::_extract_row_details
+   - src/modules/estudio_scraper.py::get_match_details_from_row_of
+):
+   - Buscar la celda de handicap por atributo:
+     • Prioridad: primer <td> con atributo data-o que contenga números o texto de handicap.
+     • Si no hay data-o, tomar el primer <td> cuyo texto contenga un patrón de handicap (número con signo, “pk”, “pick”, “平手”, “平/半”).
+   - No usar índice fijo 11; si se prefiere índice, calcula el índice del primer th que contenga “ah” (case-insensitive) y úsalo.
+   - Ejemplo de helper:
+     def _extract_handicap_cell(cells):
+         for td in cells:
+             raw = (td.get('data-o') or td.get_text(strip=True) or '').strip()
+             if not raw:
+                 continue
+             if re.search(r'[+-]?\d', raw) or raw.lower() in ('pk','p.k','pick','平手','平/半'):
+                 return raw
+         return '-'
+     Luego:
+         handicap_raw = _extract_handicap_cell(cells)
+         handicap_fmt = format_ah_as_decimal_string_of(handicap_raw)
+
+2) Ampliar parser de handicap (src/modules/estudio_scraper.py::parse_ah_to_number_of si es el usado globalmente, o añadir un wrapper en app.py si prefieres):
+   - Mapear “pk”/“p.k”/“pick”/“平手” a 0
+   - Mapear “平/半” a “0/0.5” (por tanto 0.25)
+   - Normalizar comas -> puntos, quitar espacios
+
+3) Mantener las consignas:
+   - No asumir índice fijo; usar búsqueda por data-o o por cabecera AH.
+   - Evitar devolver “-” si hay texto de handicap; solo “-” cuando realmente no hay dato.
+   - Respetar el flujo existente: las funciones siguen retornando handicap_raw, handicap (formateado), handicap_numeric.
+
+Pruebas rápidas a realizar:
+- Reprocesar html_extraer/analisis.txt con BeautifulSoup y la nueva lógica para confirmar que devuelve handicaps (-1.5, -0.5, etc.) en table_v1 y table_v2.
+- Llamar a _extract_recent_matches_from_soup y confirmar que ahora entregan handicap != “-”.
+- Probar /api/preview_basico con un partido de data.json y verificar que badge AH no muestra “-”.
+
+Rutas afectadas (referencia):
+- src/app.py::_extract_row_details (usado por vista rápida)
+- src/modules/estudio_scraper.py::get_match_details_from_row_of (usado por análisis completo)
+
+No tocar:
+- Estructura de payload más allá de corregir handicaps; mantener nombres de campos actuales.
+- Cache y lógica de negocio.
+
+Objetivo final:
+- Vista rápida y estudio muestren el handicap real, no “-”, usando extracción resistente a cambios de columnas y parsing de alias de handicap.

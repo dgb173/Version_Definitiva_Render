@@ -25,7 +25,8 @@ from modules.estudio_scraper import (
     parse_ah_to_number_of,
     check_handicap_cover,
     generar_analisis_completo_mercado,
-    obtener_soup_partido
+    obtener_soup_partido,
+    extract_handicap_from_cells
 )
 from flask import jsonify # Asegúrate de que jsonify está importado
 
@@ -318,11 +319,11 @@ def _extract_row_details(row_element, score_class: str):
         score_cell = cells[3]
         score_span = score_cell.find('span', class_=lambda cls: isinstance(cls, str) and score_class in cls)
         score_text = _normalize_score_text(score_span.get_text(strip=True) if score_span else score_cell.get_text(strip=True))
-        handicap_cell = cells[11] if len(cells) > 11 else None
-        handicap_raw = '-'
-        if handicap_cell:
-            handicap_raw = (handicap_cell.get('data-o') or handicap_cell.get_text(strip=True) or '-').strip() or '-'
+        
+        # Usar el nuevo método robusto de extracción de handicap
+        handicap_raw = extract_handicap_from_cells(cells)
         handicap_numeric = parse_ah_to_number_of(handicap_raw)
+        
         return {
             'league': league,
             'date': date_text,

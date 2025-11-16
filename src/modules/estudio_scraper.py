@@ -67,22 +67,46 @@ def _set_cached_analysis(match_id: str, payload: dict):
 # --- FUNCIONES HELPER PARA PARSEO Y FORMATEO ---
 def parse_ah_to_number_of(ah_line_str: str):
     if not isinstance(ah_line_str, str): return None
-    s = ah_line_str.strip().replace(' ', '')
+    
+    # Normalizar input: minúsculas, sin espacios extra, comas a puntos
+    s = ah_line_str.strip().lower().replace(' ', '').replace(',', '.')
+    
     if not s or s in ['-', '?']: return None
+
+    # Mapeo para valores de handicap especiales que equivalen a 0
+    special_cases_zero = {
+        'pk': 0.0,
+        'p.k': 0.0,
+        'pick': 0.0,
+        '平手': 0.0
+    }
+    if s in special_cases_zero:
+        return special_cases_zero[s]
+
+    # Convertir '平/半' a un formato que el parser pueda entender
+    if s == '平/半':
+        s = '0/0.5'
+
     original_starts_with_minus = ah_line_str.strip().startswith('-')
+    
     try:
         if '/' in s:
             parts = s.split('/')
             if len(parts) != 2: return None
+            
             p1_str, p2_str = parts[0], parts[1]
             val1 = float(p1_str)
             val2 = float(p2_str)
+
+            # Si la primera parte es negativa, la segunda también debería serlo si no está firmada
             if val1 < 0 and not p2_str.startswith('-') and val2 > 0:
                  val2 = -abs(val2)
+            # Manejar casos como '0/-0.5' donde la cadena original no empieza con '-'
             elif original_starts_with_minus and val1 == 0.0 and \
                  (p1_str == "0" or p1_str == "-0") and \
                  not p2_str.startswith('-') and val2 > 0:
                 val2 = -abs(val2)
+                
             return (val1 + val2) / 2.0
         else:
             return float(s)
@@ -117,6 +141,31 @@ def format_ah_as_decimal_string_of(ah_line_str: str, for_sheets=False):
     if for_sheets:
         return "'" + output_str.replace('.', ',') if output_str not in ['-','?'] else output_str
     return output_str
+
+def extract_handicap_from_cells(cells):
+    """
+    Extracts the raw handicap value from a list of table cells (<td>).
+    It iterates through cells, prioritizing values that are most uniquely
+    identifiable as a handicap line. If only positive numbers are found,
+    it assumes the last one is the most likely candidate.
+    """
+    candidate = None
+    for td in cells:
+        raw = (td.get('data-o') or td.get_text(strip=True) or '').strip()
+        if not raw or raw == '-':
+            continue
+
+        # Prioridad 1: Indicadores fuertes de handicap. Devolver inmediatamente.
+        if '/' in raw or raw.startswith('-') or raw.lower() in ('pk', 'p.k', 'pick', '平手', '平/半', '0'):
+            return raw
+
+        # Prioridad 2: Números positivos. Podrían ser cuotas o un handicap.
+        # Se actualiza el candidato con cada número positivo encontrado,
+        # asumiendo que los valores de handicap aparecen más tarde en la fila que las cuotas 1x2.
+        if re.fullmatch(r'\d+(\.\d+)?', raw):
+            candidate = raw
+
+    return candidate if candidate is not None else '-'
 
 def _df_to_rows(df):
     rows = []
@@ -313,23 +362,30 @@ def generar_analisis_completo_mercado(main_odds, h2h_data, home_name, away_name)
 def get_match_details_from_row_of(row_element, score_class_selector='score', source_table_type='h2h'):
     try:
         cells = row_element.find_all('td')
-        home_idx, score_idx, away_idx, ah_idx = 2, 3, 4, 11
-        if len(cells) <= ah_idx: return None
+        # Se mantienen los índices fijos para home, score, away ya que no se reportaron como problemáticos.
+        home_idx, score_idx, away_idx = 2, 3, 4
+        if len(cells) <= max(home_idx, score_idx, away_idx): return None # Chequeo básico
+
         date_span = cells[1].find('span', attrs={'name': 'timeData'})
         date_txt = date_span.get_text(strip=True) if date_span else ''
+        
         def get_cell_txt(idx):
             a = cells[idx].find('a')
             return a.get_text(strip=True) if a else cells[idx].get_text(strip=True)
+            
         home, away = get_cell_txt(home_idx), get_cell_txt(away_idx)
         if not home or not away: return None
+        
         score_cell = cells[score_idx]
         score_span = score_cell.find('span', class_=lambda c: isinstance(c, str) and score_class_selector in c)
         score_raw_text = (score_span.get_text(strip=True) if score_span else score_cell.get_text(strip=True)) or ''
         m = re.search(r'(\d+)\s*-\s*(\d+)', score_raw_text)
         score_raw, score_fmt = (f"{m.group(1)}-{m.group(2)}", f"{m.group(1)}:{m.group(2)}") if m else ('?-?', '?:?')
-        ah_cell = cells[ah_idx]
-        ah_line_raw = (ah_cell.get('data-o') or ah_cell.text).strip()
+        
+        # Usar el nuevo método robusto de extracción de handicap en lugar de un índice fijo
+        ah_line_raw = extract_handicap_from_cells(cells)
         ah_line_fmt = format_ah_as_decimal_string_of(ah_line_raw) if ah_line_raw not in ['', '-'] else '-'
+        
         return {
             'date': date_txt, 'home': home, 'away': away, 'score': score_fmt,
             'score_raw': score_raw, 'ahLine': ah_line_fmt, 'ahLine_raw': ah_line_raw or '-',
