@@ -1,298 +1,179 @@
-
+# scripts/scraping_logic.py
 import asyncio
-from bs4 import BeautifulSoup
-import datetime
+import json
 import re
 import cloudscraper
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import threading
-from app_utils import normalize_handicap_to_half_bucket_str, _parse_handicap_to_float
+from datetime import datetime, timedelta
 
-URL_NOWGOAL = "https://live20.nowgoal25.com/"
-REQUEST_TIMEOUT_SECONDS = 12
-_REQUEST_HEADERS = {
+# --- CONFIGURACIÓN ---
+JS_URL = "https://live20.nowgoal25.com/gf/data/bf_en-idn.js"
+REQUEST_TIMEOUT_SECONDS = 15
+REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Connection": "keep-alive",
-    "Referer": URL_NOWGOAL,
+    "Referer": "https://live20.nowgoal25.com/",
 }
 
-_requests_session = None
-_requests_session_lock = threading.Lock()
-_requests_fetch_lock = threading.Lock()
+# --- LÓGICA DE SCRAPING ---
 
+def _get_session():
+    """Crea y devuelve una sesión de cloudscraper."""
+    return cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    )
 
-def _build_handicap_filter_predicate(handicap_filter):
-    if not handicap_filter:
-        return None
+def _fetch_js_data_sync():
+    """Descarga el contenido del archivo JS de datos."""
+    session = _get_session()
     try:
-        target_bucket = normalize_handicap_to_half_bucket_str(handicap_filter)
-        if target_bucket is None:
-            return None
-        target_float = float(target_bucket)
-    except Exception:
-        return None
-
-    use_range = abs(target_float) >= 2.0 and target_float != 0.0
-
-    def predicate(raw_value):
-        hv = normalize_handicap_to_half_bucket_str(raw_value or '')
-        if hv is None:
-            return False
-        if not use_range:
-            return hv == target_bucket
-        hv_float = float(hv)
-        if target_float > 0:
-            return hv_float > 0 and hv_float >= target_float
-        return hv_float < 0 and hv_float <= target_float
-
-    return predicate
-
-
-def _build_goal_line_filter_predicate(goal_line_filter):
-    if not goal_line_filter:
-        return None
-    try:
-        target_value = _parse_handicap_to_float(goal_line_filter)
-    except Exception:
-        target_value = None
-    if target_value is None:
-        return None
-    use_range = target_value >= 4.0
-
-    def predicate(raw_value):
-        try:
-            current_value = _parse_handicap_to_float(raw_value or '')
-        except Exception:
-            current_value = None
-        if current_value is None:
-            return False
-        if not use_range:
-            return abs(current_value - target_value) < 1e-6
-        return current_value >= target_value
-
-    return predicate
-
-def _build_nowgoal_url(path: str | None = None) -> str:
-    if not path:
-        return URL_NOWGOAL
-    base = URL_NOWGOAL.rstrip('/')
-    suffix = path.lstrip('/')
-    return f"{base}/{suffix}"
-
-def _get_shared_requests_session():
-    global _requests_session
-    with _requests_session_lock:
-        if _requests_session is None:
-            session = cloudscraper.create_scraper(
-                browser={
-                    "browser": "chrome",
-                    "platform": "windows",
-                    "mobile": False,
-                }
-            )
-            retries = Retry(total=3, backoff_factor=0.4, status_forcelist=[500, 502, 503, 504])
-            adapter = HTTPAdapter(max_retries=retries)
-            session.mount("https://", adapter)
-            session.mount("http://", adapter)
-            session.headers.update(_REQUEST_HEADERS)
-            _requests_session = session
-        return _requests_session
-
-def _fetch_nowgoal_html_sync(url: str) -> str | None:
-    session = _get_shared_requests_session()
-    try:
-        with _requests_fetch_lock:
-            response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response = session.get(JS_URL, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
         return response.text
-    except Exception as exc:
-        print(f"Error al obtener {url} con requests: {exc}")
+    except Exception as e:
+        print(f"Error al descargar los datos del JS: {e}")
         return None
 
-async def _fetch_nowgoal_html(path: str | None = None, filter_state: int | None = None, requests_first: bool = True) -> str | None:
-    target_url = _build_nowgoal_url(path)
+def _sanitize_js_content(js_content):
+    """Limpia el contenido del JS para convertirlo en un JSON válido."""
+    # Extraer el bloque de asignaciones del array A
+    match = re.search(r"(A\[\d+\].*?B\[\d+\])", js_content, re.DOTALL)
+    if not match:
+        print("No se pudo encontrar el bloque de datos 'A' en el contenido JS.")
+        return None
+
+    # El contenido que nos interesa termina antes de la primera asignación de B
+    array_content = match.group(1).split("B[")[0]
+    
+    # Extraer cada asignación individual de A
+    array_items = re.findall(r"A\[\d+\]=\[(.*?)\];", array_content)
+    if not array_items:
+        print("No se encontraron items en el array 'A'.")
+        return None
+        
+    # Construir un string JSON a partir de los items
+    json_string = "[" + ",".join([f"[{item}]" for item in array_items]) + "]"
+
+    # Realizar reemplazos para que sea un JSON válido
+    json_string = json_string.replace("'", '"')
+    # Manejar casos como <font color=...> que no usan comillas
+    json_string = re.sub(r'<font color=([^>]+)>', r'<font color=\\"\1\\">', json_string)
+    json_string = re.sub(r',,', ',null,', json_string)
+    json_string = re.sub(r',,', ',null,', json_string)
+    json_string = re.sub(r'\[,', '[null,', json_string)
+    json_string = re.sub(r',\]', ',null]', json_string)
+
+    return json_string
+
+def _parse_sanitized_json(json_string):
+    """Parsea el string JSON saneado."""
     try:
-        return await asyncio.to_thread(_fetch_nowgoal_html_sync, target_url)
-    except Exception as exc:
-        print(f"Error asincronico al obtener {target_url}: {exc}")
+        return json.loads(json_string)
+    except json.JSONDecodeError as e:
+        print(f"Error al decodificar el JSON: {e}")
+        # Opcional: encontrar el lugar del error para depurar
+        # print(f"Error cerca de: {json_string[e.pos-20:e.pos+20]}")
         return None
 
-
-def parse_main_page_matches(html_content, limit=20, offset=0, handicap_filter=None, goal_line_filter=None):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    match_rows = soup.find_all('tr', id=lambda x: x and x.startswith('tr1_'))
+def _process_match_data(all_matches):
+    """Procesa la lista de partidos para dividirlos y darles el formato correcto."""
     upcoming_matches = []
-    now_utc = datetime.datetime.utcnow()
-
-    for row in match_rows:
-        match_id = row.get('id', '').replace('tr1_', '')
-        if not match_id: continue
-
-        time_cell = row.find('td', {'name': 'timeData'})
-        if not time_cell or not time_cell.has_attr('data-t'): continue
-        
-        try:
-            match_time = datetime.datetime.strptime(time_cell['data-t'], '%Y-%m-%d %H:%M:%S')
-        except (ValueError, IndexError):
-            continue
-
-        if match_time < now_utc: continue
-
-        home_team_tag = row.find('a', {'id': f'team1_{match_id}'})
-        away_team_tag = row.find('a', {'id': f'team2_{match_id}'})
-        odds_data = row.get('odds', '').split(',')
-        handicap = odds_data[2] if len(odds_data) > 2 else "N/A"
-        goal_line = odds_data[10] if len(odds_data) > 10 else "N/A"
-
-        if handicap == "N/A":
-            continue
-
-        upcoming_matches.append({
-            "id": match_id,
-            "time_obj": match_time,
-            "home_team": home_team_tag.text.strip() if home_team_tag else "N/A",
-            "away_team": away_team_tag.text.strip() if away_team_tag else "N/A",
-            "handicap": handicap,
-            "goal_line": goal_line
-        })
-
-    handicap_predicate = _build_handicap_filter_predicate(handicap_filter)
-    if handicap_predicate:
-        filtered = []
-        for m in upcoming_matches:
-            if handicap_predicate(m.get('handicap', '')):
-                filtered.append(m)
-        upcoming_matches = filtered
-
-    goal_predicate = _build_goal_line_filter_predicate(goal_line_filter)
-    if goal_predicate:
-        filtered = []
-        for m in upcoming_matches:
-            if goal_predicate(m.get('goal_line', '')):
-                filtered.append(m)
-        upcoming_matches = filtered
-
-    upcoming_matches.sort(key=lambda x: x['time_obj'])
-    
-    paginated_matches = upcoming_matches[offset:offset+limit]
-
-    for match in paginated_matches:
-        match['time'] = (match['time_obj'] + datetime.timedelta(hours=1)).strftime('%H:%M')
-        # Keep time_obj for sorting but convert to string for JSON compatibility
-        match['time_obj'] = match['time_obj'].isoformat()
-
-    return paginated_matches
-
-def parse_main_page_finished_matches(html_content, limit=20, offset=0, handicap_filter=None, goal_line_filter=None):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    match_rows = soup.find_all('tr', id=lambda x: x and x.startswith('tr1_'))
     finished_matches = []
-    for row in match_rows:
-        match_id = row.get('id', '').replace('tr1_', '')
-        if not match_id: continue
 
-        state = row.get('state')
-        if state is not None and state != "-1":
+    for match_data in all_matches:
+        try:
+            state = match_data[8]
+            
+            # Mapeo de datos basado en el análisis del archivo JS
+            match_dict = {
+                "id": match_data[0],
+                "home_team": match_data[4],
+                "away_team": match_data[5],
+                "handicap": match_data[21],
+                "goal_line": match_data[25],
+                "state": state,
+            }
+
+            # Partidos finalizados (state == -1)
+            if state == -1:
+                match_dict["score"] = f"{match_data[9]}-{match_data[10]}"
+                time_str = match_data[6]
+                try:
+                    time_obj = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                    match_dict["time_obj"] = time_obj.isoformat()
+                    match_dict["time"] = (time_obj + timedelta(hours=1)).strftime('%d/%m %H:%M')
+                except (ValueError, TypeError):
+                    match_dict["time_obj"] = None
+                    match_dict["time"] = "N/A"
+                finished_matches.append(match_dict)
+
+            # Partidos próximos (state < 8 y no finalizado)
+            elif state is not None and state < 8:
+                time_str = match_data[6]
+                try:
+                    time_obj = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                    match_dict["time_obj"] = time_obj.isoformat()
+                    match_dict["time"] = (time_obj + timedelta(hours=1)).strftime('%H:%M')
+                except (ValueError, TypeError):
+                    match_dict["time_obj"] = None
+                    match_dict["time"] = "N/A"
+                upcoming_matches.append(match_dict)
+
+        except (IndexError, TypeError) as e:
+            # print(f"Error procesando un partido, saltando: {e} - Datos: {match_data}")
             continue
+            
+    # Ordenar las listas
+    upcoming_matches.sort(key=lambda x: x.get('time_obj') or '')
+    finished_matches.sort(key=lambda x: x.get('time_obj') or '', reverse=True)
 
-        cells = row.find_all('td')
-        if len(cells) < 8: continue
+    return upcoming_matches, finished_matches
 
-        home_team_tag = row.find('a', {'id': f'team1_{match_id}'})
-        away_team_tag = row.find('a', {'id': f'team2_{match_id}'})
-        
-        score_cell = cells[6]
-        score_text = "N/A"
-        if score_cell:
-            b_tag = score_cell.find('b')
-            if b_tag:
-                score_text = b_tag.text.strip()
-            else:
-                score_text = score_cell.get_text(strip=True)
-
-        if not re.match(r'^\d+\s*-\s*\d+$', score_text):
-            continue
-
-        odds_data = row.get('odds', '').split(',')
-        handicap = odds_data[2] if len(odds_data) > 2 else "N/A"
-        goal_line = odds_data[10] if len(odds_data) > 10 else "N/A"
-
-        if handicap == "N/A":
-            continue
-
-        time_cell = row.find('td', {'name': 'timeData'})
-        match_time = datetime.datetime.now()
-        if time_cell and time_cell.has_attr('data-t'):
-            try:
-                match_time = datetime.datetime.strptime(time_cell['data-t'], '%Y-%m-%d %H:%M:%S')
-            except (ValueError, IndexError):
-                continue
-        
-        finished_matches.append({
-            "id": match_id,
-            "time_obj": match_time,
-            "home_team": home_team_tag.text.strip() if home_team_tag else "N/A",
-            "away_team": away_team_tag.text.strip() if away_team_tag else "N/A",
-            "score": score_text,
-            "handicap": handicap,
-            "goal_line": goal_line
-        })
-
-    handicap_predicate = _build_handicap_filter_predicate(handicap_filter)
-    if handicap_predicate:
-        filtered = []
-        for m in finished_matches:
-            if handicap_predicate(m.get('handicap', '')):
-                filtered.append(m)
-        finished_matches = filtered
-
-    goal_predicate = _build_goal_line_filter_predicate(goal_line_filter)
-    if goal_predicate:
-        filtered = []
-        for m in finished_matches:
-            if goal_predicate(m.get('goal_line', '')):
-                filtered.append(m)
-        finished_matches = filtered
-
-    finished_matches.sort(key=lambda x: x['time_obj'], reverse=True)
+async def fetch_and_process_data():
+    """Función principal asíncrona que orquesta todo el proceso."""
+    print("Descargando y procesando datos desde el archivo JS...")
     
-    paginated_matches = finished_matches[offset:offset+limit]
+    # Ejecutar la descarga en un hilo separado para no bloquear el loop de asyncio
+    js_content = await asyncio.to_thread(_fetch_js_data_sync)
+    if not js_content:
+        return [], []
 
-    for match in paginated_matches:
-        match['time'] = (match['time_obj'] + datetime.timedelta(hours=1)).strftime('%d/%m %H:%M')
-        match['time_obj'] = match['time_obj'].isoformat()
+    print("Saneando contenido JS...")
+    sanitized_string = _sanitize_js_content(js_content)
+    if not sanitized_string:
+        return [], []
 
-    return paginated_matches
+    print("Parseando datos JSON...")
+    all_matches_data = _parse_sanitized_json(sanitized_string)
+    if not all_matches_data:
+        return [], []
 
-async def get_main_page_matches_async(limit=20, offset=0, handicap_filter=None, goal_line_filter=None):
-    html_content = await _fetch_nowgoal_html(filter_state=3)
-    if not html_content:
-        html_content = await _fetch_nowgoal_html(filter_state=3, requests_first=False)
-        if not html_content:
-            return []
-    matches = parse_main_page_matches(html_content, limit, offset, handicap_filter, goal_line_filter)
-    if not matches:
-        html_content = await _fetch_nowgoal_html(filter_state=3, requests_first=False)
-        if not html_content:
-            return []
-        matches = parse_main_page_matches(html_content, limit, offset, handicap_filter, goal_line_filter)
-    return matches
+    print("Procesando y clasificando partidos...")
+    upcoming, finished = _process_match_data(all_matches_data)
+    
+    return upcoming, finished
 
-async def get_main_page_finished_matches_async(limit=20, offset=0, handicap_filter=None, goal_line_filter=None):
-    html_content = await _fetch_nowgoal_html(path='football/results')
-    if not html_content:
-        html_content = await _fetch_nowgoal_html(path='football/results', requests_first=False)
-        if not html_content:
-            return []
-    matches = parse_main_page_finished_matches(html_content, limit, offset, handicap_filter, goal_line_filter)
-    if not matches:
-        html_content = await _fetch_nowgoal_html(path='football/results', requests_first=False)
-        if not html_content:
-            return []
-        matches = parse_main_page_finished_matches(html_content, limit, offset, handicap_filter, goal_line_filter)
-    return matches
+# --- Funciones para compatibilidad con run_scraper.py ---
 
+async def get_main_page_matches_async(limit=2000, **kwargs):
+    # Esta función ahora es un wrapper. La lógica principal se comparte.
+    # El filtrado y paginación se podrían aplicar aquí si fuera necesario.
+    upcoming, _ = await fetch_and_process_data()
+    return upcoming[:limit]
+
+async def get_main_page_finished_matches_async(limit=1500, **kwargs):
+    # Esta función ahora es un wrapper. La lógica principal se comparte.
+    _, finished = await fetch_and_process_data()
+    return finished[:limit]
+
+# Este bloque es para permitir pruebas directas del script
+if __name__ == '__main__':
+    async def test_run():
+        upcoming, finished = await fetch_and_process_data()
+        print(f"\n--- Muestra de Partidos Próximos ({len(upcoming)}) ---")
+        for match in upcoming[:5]:
+            print(f"ID: {match['id']}, {match['home_team']} vs {match['away_team']}, Handicap: {match['handicap']}")
+        
+        print(f"\n--- Muestra de Partidos Finalizados ({len(finished)}) ---")
+        for match in finished[:5]:
+            print(f"ID: {match['id']}, {match['home_team']} vs {match['away_team']}, Score: {match['score']}, Handicap: {match['handicap']}")
+
+    asyncio.run(test_run())
