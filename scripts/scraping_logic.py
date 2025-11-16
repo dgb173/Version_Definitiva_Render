@@ -151,19 +151,6 @@ async def fetch_and_process_data():
     
     return upcoming, finished
 
-# --- Funciones para compatibilidad con run_scraper.py ---
-
-async def get_main_page_matches_async(limit=2000, **kwargs):
-    # Esta función ahora es un wrapper. La lógica principal se comparte.
-    # El filtrado y paginación se podrían aplicar aquí si fuera necesario.
-    upcoming, _ = await fetch_and_process_data()
-    return upcoming[:limit]
-
-async def get_main_page_finished_matches_async(limit=1500, **kwargs):
-    # Esta función ahora es un wrapper. La lógica principal se comparte.
-    _, finished = await fetch_and_process_data()
-    return finished[:limit]
-
 # Este bloque es para permitir pruebas directas del script
 if __name__ == '__main__':
     async def test_run():

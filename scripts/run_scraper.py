@@ -1,22 +1,19 @@
 import asyncio
 import json
 
-# Importamos las funciones de scraping desde el nuevo módulo
-from scraping_logic import get_main_page_matches_async, get_main_page_finished_matches_async
+# Importamos la función principal de scraping
+from scraping_logic import fetch_and_process_data
 
 async def main():
     """
-    Función principal que ejecuta ambos scrapers y combina los resultados.
+    Función principal que ejecuta el scraper y guarda los resultados.
     """
     print("Iniciando el proceso de scraping principal...")
     
-    # Obtenemos los partidos próximos y los finalizados en paralelo
-    proximos, finalizados = await asyncio.gather(
-        get_main_page_matches_async(limit=2000), # Aumentamos el límite para tener más datos
-        get_main_page_finished_matches_async(limit=1500)
-    )
+    # Obtenemos los partidos próximos y los finalizados con una sola llamada
+    proximos, finalizados = await fetch_and_process_data()
     
-    print(f"Scraping de listas finalizado. {len(proximos)} partidos próximos y {len(finalizados)} finalizados.")
+    print(f"Scraping finalizado. {len(proximos)} partidos próximos y {len(finalizados)} finalizados.")
 
     # Creamos un diccionario con todos los datos
     scraped_data = {
