@@ -1,0 +1,449 @@
+Vale, vamos a montar algo serio y reutilizable.
+
+Te dejo un **módulo en Python** con:
+
+* Una clase `MatchStats` para guardar los datos de cada partido.
+* Funciones para:
+
+  * Medir **dominancia** (stats vs rival).
+  * Ver si el equipo **cubrió o no** el hándicap de ese partido.
+  * Detectar si un equipo viene **infravalorado / sobrevalorado** para el siguiente.
+  * Calcular una **comparativa indirecta** con rivales comunes.
+* Una función principal `patrones_previos` que te devuelve:
+
+  * Señal sobre el **lado del hándicap** (local/visitante/sin edge fuerte).
+  * Señal sobre **goles** (over/under/neutro).
+  * Explicación en texto para que tú puedas usarla tal cual.
+
+> Importante: esto NO garantiza beneficio seguro (las casas ajustan constantemente). Es una forma estructurada de detectar patrones y posibles edges que luego tú tendrás que **backtestear** y afinar.
+
+---
+
+### Código Python: `patrones_previos.py`
+
+```python
+from dataclasses import dataclass
+from typing import List, Literal, Dict, Any, Optional
+
+
+SideSignal = Literal["local", "visitante", "neutro"]
+TotalSignal = Literal["over", "under", "neutro"]
+ValueSignal = Literal["infravalorado", "sobrevalorado", "neutral"]
+CoverResult = Literal["cubre", "push", "no_cubre"]
+
+
+@dataclass
+class MatchStats:
+    """Estadísticas de un partido desde el punto de vista de UN equipo."""
+    team: str
+    opponent: str
+    is_home: bool
+    goals_for: int
+    goals_against: int
+    shots_for: int
+    shots_against: int
+    shots_on_target_for: int
+    shots_on_target_against: int
+    dangerous_attacks_for: int
+    dangerous_attacks_against: int
+    handicap: float          # AH para este equipo (ej: -0.25, +1.0, 0, etc.)
+    goal_line: float         # línea de goles (ej: 2.5, 3.0, etc.)
+
+
+def dominance_index(m: MatchStats) -> float:
+    """
+    Índice de dominancia simple a partir de las estadísticas.
+    Ajusta pesos a tu gusto y backtestea.
+    """
+    shot_diff = m.shots_for - m.shots_against
+    sot_diff = m.shots_on_target_for - m.shots_on_target_against
+    da_diff = m.dangerous_attacks_for - m.dangerous_attacks_against
+
+    # Pesos heurísticos (ajustables)
+    return 0.4 * shot_diff + 0.4 * sot_diff + 0.2 * (da_diff / 5.0)
+
+
+def cover_vs_handicap(m: MatchStats) -> CoverResult:
+    """
+    Compara el resultado real con el hándicap asiático del equipo.
+    margin = (diferencia de goles) + AH de este equipo.
+    """
+    goal_diff = m.goals_for - m.goals_against
+    margin = goal_diff + m.handicap
+
+    if margin > 0:
+        return "cubre"
+    elif margin == 0:
+        return "push"
+    else:
+        return "no_cubre"
+
+
+def value_shift_signal(m: MatchStats) -> ValueSignal:
+    """
+    Determina si el equipo debería subir o bajar de valoración
+    para el siguiente partido según:
+      - Si dominó el partido (dominance_index)
+      - Si cubrió o no el hándicap
+
+    Lógica:
+      - Dominó pero NO cubrió -> infravalorado
+      - Fue dominado pero SÍ cubrió -> sobrevalorado
+      - Resto -> neutral
+    """
+    dom = dominance_index(m)
+    cover = cover_vs_handicap(m)
+
+    # Umbrales ajustables
+    DOM_THRESHOLD = 2.0  # cuánto debe dominar para considerarse "dominio claro"
+
+    if dom > DOM_THRESHOLD and cover == "no_cubre":
+        return "infravalorado"
+    elif dom < -DOM_THRESHOLD and cover == "cubre":
+        return "sobrevalorado"
+    else:
+        return "neutral"
+
+
+def indirect_comparison(
+    match_a_vs_x: MatchStats,
+    match_b_vs_x: MatchStats,
+) -> float:
+    """
+    Comparativa indirecta entre equipo A y B usando el mismo rival X.
+
+    Devuelve un score:
+      > 0  -> A mejor posicionado que B
+      < 0  -> B mejor posicionado que A
+      ≈ 0  -> igualdad
+
+    Mezcla:
+      - Dominancia estadísticas
+      - Resultado (goles)
+    """
+    dom_a = dominance_index(match_a_vs_x)
+    dom_b = dominance_index(match_b_vs_x)
+
+    gd_a = match_a_vs_x.goals_for - match_a_vs_x.goals_against
+    gd_b = match_b_vs_x.goals_for - match_b_vs_x.goals_against
+
+    # Peso de dominio y diferencia de goles
+    dom_component = dom_a - dom_b
+    gd_component = (gd_a - gd_b) * 2.0  # da más peso al marcador final
+
+    return dom_component + gd_component
+
+
+def aggregate_indirect_strength(
+    local_vs_common: List[MatchStats],
+    visitante_vs_common: List[MatchStats],
+) -> float:
+    """
+    Si hay varios rivales comunes:
+       local_vs_common[i] es el partido del local vs rival_i
+       visitante_vs_common[i] es el partido del visitante vs rival_i
+
+    Devuelve un score promedio:
+        > 0 -> local superior por comparativa indirecta
+        < 0 -> visitante superior
+    """
+    assert len(local_vs_common) == len(visitante_vs_common), \
+        "Listas de comparativas indirectas deben tener la misma longitud"
+
+    if not local_vs_common:
+        return 0.0
+
+    scores = []
+    for m_loc, m_vis in zip(local_vs_common, visitante_vs_common):
+        scores.append(indirect_comparison(m_loc, m_vis))
+
+    return sum(scores) / len(scores)
+
+
+def total_goals_tendency(matches: List[MatchStats]) -> float:
+    """
+    Estima tendencia de goles a partir de varios partidos recientes de un equipo.
+    Devuelve un score:
+        > 0 -> tendencia a partidos over
+        < 0 -> tendencia a partidos under
+    """
+    if not matches:
+        return 0.0
+
+    scores = []
+    for m in matches:
+        total_goals = m.goals_for + m.goals_against
+        # Diferencia respecto a la línea de ese partido
+        diff_line = total_goals - m.goal_line
+        scores.append(diff_line)
+
+    # Promedio de cuánto se han ido por encima/por debajo de sus líneas
+    return sum(scores) / len(scores)
+
+
+def decide_side_signal(
+    local_last: MatchStats,
+    visitante_last: MatchStats,
+    local_vs_common: List[MatchStats],
+    visitante_vs_common: List[MatchStats],
+) -> SideSignal:
+    """
+    Decide si, por patrón, hay más valor en el lado del local, del visitante o ninguno.
+    Usa:
+      - Señal de infravaloración/sobrevaloración de ambos
+      - Comparativa indirecta agregada
+    """
+    local_val = value_shift_signal(local_last)
+    vis_val = value_shift_signal(visitante_last)
+    indirect_score = aggregate_indirect_strength(local_vs_common, visitante_vs_common)
+
+    # Umbral para considerar que la comparativa indirecta es clara
+    INDIRECT_THRESHOLD = 1.0
+
+    # Caso ideal: local infravalorado + visitante sobrevalorado + comparativa favorable al local
+    if (local_val == "infravalorado" and
+        vis_val == "sobrevalorado" and
+        indirect_score > INDIRECT_THRESHOLD):
+        return "local"
+
+    # Caso contrario fuerte: visitante infravalorado + local sobrevalorado + comparativa favorable al visitante
+    if (vis_val == "infravalorado" and
+        local_val == "sobrevalorado" and
+        indirect_score < -INDIRECT_THRESHOLD):
+        return "visitante"
+
+    # Resto -> sin edge claro (desde este patrón)
+    return "neutro"
+
+
+def decide_total_signal(
+    local_recent: List[MatchStats],
+    visitante_recent: List[MatchStats],
+    closing_goal_line: float,
+) -> TotalSignal:
+    """
+    Señal sobre over/under usando tendencia de goles de ambos equipos.
+    """
+    loc_tend = total_goals_tendency(local_recent)
+    vis_tend = total_goals_tendency(visitante_recent)
+
+    combined = (loc_tend + vis_tend) / 2.0
+
+    # Umbrales ajustables
+    OVER_THRESHOLD = 0.3   # si de media se van 0.3 goles por encima de la línea
+    UNDER_THRESHOLD = -0.3
+
+    if combined > OVER_THRESHOLD:
+        return "over"
+    elif combined < UNDER_THRESHOLD:
+        return "under"
+    else:
+        return "neutro"
+
+
+def patrones_previos(
+    local_last: MatchStats,
+    visitante_last: MatchStats,
+    local_vs_common: List[MatchStats],
+    visitante_vs_common: List[MatchStats],
+    local_recent: Optional[List[MatchStats]] = None,
+    visitante_recent: Optional[List[MatchStats]] = None,
+    closing_goal_line: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Función principal.
+
+    Devuelve:
+      - señal_lado: local / visitante / neutro
+      - señal_goles: over / under / neutro
+      - explicacion: texto con la lógica del patrón
+      - detalles: info auxiliar para debug/backtest
+    """
+    local_recent = local_recent or [local_last]
+    visitante_recent = visitante_recent or [visitante_last]
+
+    # Si no se pasa la línea de goles final, usamos la del último partido del local como aproximación.
+    if closing_goal_line is None:
+        closing_goal_line = local_last.goal_line
+
+    side = decide_side_signal(local_last, visitante_last, local_vs_common, visitante_vs_common)
+    total = decide_total_signal(local_recent, visitante_recent, closing_goal_line)
+
+    # Para la explicación, recogemos info relevante
+    local_val = value_shift_signal(local_last)
+    vis_val = value_shift_signal(visitante_last)
+    indirect_score = aggregate_indirect_strength(local_vs_common, visitante_vs_common)
+
+    explicacion = []
+
+    explicacion.append(
+        f"El equipo local ({local_last.team}) en su último partido presentó un estado "
+        f"de valoración '{local_val}' según dominancia ({dominance_index(local_last):.2f}) "
+        f"y resultado vs hándicap ('{cover_vs_handicap(local_last)}')."
+    )
+    explicacion.append(
+        f"El equipo visitante ({visitante_last.team}) en su último partido presentó un estado "
+        f"de valoración '{vis_val}' con dominancia {dominance_index(visitante_last):.2f} "
+        f"y resultado vs hándicap ('{cover_vs_handicap(visitante_last)}')."
+    )
+    explicacion.append(
+        f"La comparativa indirecta con rivales comunes arroja un score medio de "
+        f"{indirect_score:.2f}, donde valores positivos favorecen al local y negativos al visitante."
+    )
+
+    if side == "local":
+        explicacion.append(
+            "El patrón típico se cumple: local infravalorado, visitante sobrevalorado "
+            "y comparativas indirectas claramente favorables al local. Esto sugiere valor "
+            "en líneas tipo hándicap asiático a favor del equipo local."
+        )
+    elif side == "visitante":
+        explicacion.append(
+            "Se observa el patrón contrario: visitante infravalorado, local sobrevalorado "
+            "y comparativas indirectas favorables al visitante. Esto sugiere valor en "
+            "hándicaps positivos del visitante."
+        )
+    else:
+        explicacion.append(
+            "Las señales de infravaloración/sobrevaloración y las comparativas indirectas "
+            "no son lo suficientemente claras como para marcar un edge fuerte en el lado del hándicap."
+        )
+
+    # Explicación de goles
+    loc_tend = total_goals_tendency(local_recent)
+    vis_tend = total_goals_tendency(visitante_recent)
+    explicacion.append(
+        f"La tendencia de goles del local respecto a sus líneas es de {loc_tend:.2f}, "
+        f"y la del visitante es de {vis_tend:.2f}. La media combinada es "
+        f"{(loc_tend + vis_tend) / 2.0:.2f} respecto a la línea {closing_goal_line:.2f}."
+    )
+
+    if total == "over":
+        explicacion.append(
+            "Ambos equipos muestran una tendencia a superar sus líneas de goles, "
+            "lo que respalda posibles estrategias de over en la línea actual."
+        )
+    elif total == "under":
+        explicacion.append(
+            "Ambos equipos tienden a quedarse por debajo de sus líneas de goles, "
+            "lo que respalda posibles planteamientos de under."
+        )
+    else:
+        explicacion.append(
+            "La tendencia de goles no es lo suficientemente marcada como para justificar "
+            "un edge claro en over/under basándonos solo en estos patrones."
+        )
+
+    return {
+        "senal_lado": side,
+        "senal_goles": total,
+        "explicacion": "\n".join(explicacion),
+        "detalles": {
+            "local_value": local_val,
+            "visitante_value": vis_val,
+            "indirect_score": indirect_score,
+            "local_dom": dominance_index(local_last),
+            "visitante_dom": dominance_index(visitante_last),
+            "local_total_tend": loc_tend,
+            "visitante_total_tend": vis_tend,
+            "closing_goal_line": closing_goal_line,
+        },
+    }
+```
+
+---
+
+### Cómo usarlo (ejemplo rápido)
+
+```python
+from patrones_previos import MatchStats, patrones_previos
+
+# Ejemplo inventado tipo Morelia–Cancún
+
+local_last = MatchStats(
+    team="Morelia",
+    opponent="Tampico",
+    is_home=True,
+    goals_for=0,
+    goals_against=0,
+    shots_for=11,
+    shots_against=5,
+    shots_on_target_for=7,
+    shots_on_target_against=2,
+    dangerous_attacks_for=42,
+    dangerous_attacks_against=41,
+    handicap=-0.25,
+    goal_line=2.25,
+)
+
+visitante_last = MatchStats(
+    team="Cancún",
+    opponent="Atlante",
+    is_home=False,
+    goals_for=1,
+    goals_against=1,
+    shots_for=7,
+    shots_against=15,
+    shots_on_target_for=2,
+    shots_on_target_against=3,
+    dangerous_attacks_for=19,
+    dangerous_attacks_against=97,
+    handicap=+1.0,
+    goal_line=2.5,
+)
+
+# Comparativas indirectas con rival común (ejemplo Tampico vs Atlante)
+local_vs_common = [
+    MatchStats(
+        team="Morelia",
+        opponent="Tampico",
+        is_home=True,
+        goals_for=0,
+        goals_against=0,
+        shots_for=11,
+        shots_against=5,
+        shots_on_target_for=7,
+        shots_on_target_against=2,
+        dangerous_attacks_for=42,
+        dangerous_attacks_against=41,
+        handicap=-0.25,
+        goal_line=2.25,
+    )
+]
+
+visitante_vs_common = [
+    MatchStats(
+        team="Cancún",
+        opponent="Atlante",
+        is_home=False,
+        goals_for=1,
+        goals_against=1,
+        shots_for=7,
+        shots_against=15,
+        shots_on_target_for=2,
+        shots_on_target_against=3,
+        dangerous_attacks_for=19,
+        dangerous_attacks_against=97,
+        handicap=+1.0,
+        goal_line=2.5,
+    )
+]
+
+resultado = patrones_previos(
+    local_last=local_last,
+    visitante_last=visitante_last,
+    local_vs_common=local_vs_common,
+    visitante_vs_common=visitante_vs_common,
+)
+
+print(resultado["senal_lado"])
+print(resultado["senal_goles"])
+print(resultado["explicacion"])
+```
+
+---
+
+Si quieres, en el siguiente paso puedo:
+
+* Adaptarlo a tu estructura real de datos (JSON/SQL/lo que uses con Nowgoal).
+* O convertir esta lógica en una función que reciba directamente el **ID de partido** y se conecte a tu base de datos para sacar todo automático.

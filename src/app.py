@@ -202,6 +202,19 @@ def _build_goal_line_options_from_lists(match_lists):
     except ValueError:
         return sorted(values)
 
+
+def _format_handicap_display(value):
+    """Formatea el handicap a cadena decimal estandarizada o devuelve None si no hay valor."""
+    if value is None:
+        return None
+    try:
+        return format_ah_as_decimal_string_of(value)
+    except Exception:
+        try:
+            return format_ah_as_decimal_string_of(str(value))
+        except Exception:
+            return str(value)
+
 _QUICK_PREVIEW_TTL_SECONDS = 240
 _quick_preview_cache = {}
 _quick_preview_cache_lock = threading.Lock()
@@ -356,6 +369,32 @@ def _extract_recent_matches_from_soup(soup, table_id: str, target_team: str, lim
     return matches
 
 
+def _normalize_bucket_value(value):
+    try:
+        return normalize_handicap_to_half_bucket_str(value)
+    except Exception:
+        return None
+
+
+def _filter_matches_by_handicap(matches, target_handicap, limit: int = 5, must_be_home: bool | None = None):
+    bucket = _normalize_bucket_value(target_handicap)
+    if bucket is None:
+        return []
+    filtered = []
+    for entry in matches or []:
+        if must_be_home is True and not entry.get('is_home'):
+            continue
+        if must_be_home is False and entry.get('is_home'):
+            continue
+        hv = _normalize_bucket_value(entry.get('raw_handicap') or entry.get('handicap') or entry.get('handicap_numeric'))
+        if hv != bucket:
+            continue
+        filtered.append(entry)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
+
 def _extract_fixture_matches(soup, container_selector: str, team_name: str, limit: int = 3):
     if not soup or not container_selector or not team_name:
         return []
@@ -502,15 +541,23 @@ def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: st
     soup = _fetch_match_analysis_soup(match_id)
     if not soup:
         return None
+    recent_home_all = _extract_recent_matches_from_soup(soup, "table_v1", home_team, limit=15)
+    recent_away_all = _extract_recent_matches_from_soup(soup, "table_v2", away_team, limit=15)
+    handicap_display = _format_handicap_display(current_handicap_value)
+    handicap_bucket = _normalize_bucket_value(current_handicap_value)
+    same_handicap_home = _filter_matches_by_handicap(recent_home_all, handicap_bucket or current_handicap_value, limit=6, must_be_home=True)
+    same_handicap_away = _filter_matches_by_handicap(recent_away_all, handicap_bucket or current_handicap_value, limit=6, must_be_home=False)
     preview_payload = {
+        'handicap_current': handicap_display,
+        'handicap_bucket': handicap_bucket,
         'recent_form': {
             'home': {
                 'team': home_team,
-                'matches': _extract_recent_matches_from_soup(soup, "table_v1", home_team)
+                'matches': recent_home_all[:5]
             },
             'away': {
                 'team': away_team,
-                'matches': _extract_recent_matches_from_soup(soup, "table_v2", away_team)
+                'matches': recent_away_all[:5]
             }
         },
         'upcoming_matches': {
@@ -523,7 +570,13 @@ def _build_enhanced_preview_payload(match_id: str, home_team: str, away_team: st
                 'matches': _extract_fixture_matches(soup, ".guest-div", away_team)
             }
         },
-        'direct_comparisons': _extract_common_comparatives(soup, home_team, away_team, current_handicap_value=current_handicap_value)
+        'direct_comparisons': _extract_common_comparatives(soup, home_team, away_team, current_handicap_value=current_handicap_value),
+        'same_handicap_matches': {
+            'handicap': handicap_display,
+            'bucket': handicap_bucket,
+            'home': same_handicap_home,
+            'away': same_handicap_away,
+        }
     }
     _write_quick_preview_cache(match_id, preview_payload)
     return preview_payload
@@ -1042,6 +1095,8 @@ def api_preview_basico(match_id):
         extra_preview = _build_enhanced_preview_payload(match_id, home_name, away_name, current_handicap_value)
         if extra_preview:
             payload.update(extra_preview)
+            if (not payload.get('handicap') or payload.get('handicap') == '-') and extra_preview.get('handicap_current'):
+                payload['handicap'] = extra_preview.get('handicap_current')
         return jsonify(payload)
     except Exception as exc:
         return jsonify({'error': f'No se pudo cargar la vista previa: {exc}'}), 500

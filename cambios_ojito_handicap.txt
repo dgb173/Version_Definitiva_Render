@@ -1,0 +1,48 @@
+Resumen de cambios y lógica aplicada para el “ojito”
+==================================================
+
+Objetivo
+--------
+- Mostrar handicaps reales en la vista rápida (ojito) en lugar de “-”.
+- Añadir una sección que liste partidos con el mismo handicap: local jugando en casa y visitante jugando fuera, con resultados y datos básicos.
+
+Fuentes de datos y parsers
+--------------------------
+- HTML de análisis H2H (`html_extraer/analisis.txt` o obtenido en runtime): extraemos tablas `table_v1` (local) y `table_v2` (visitante).
+- Cada fila de esas tablas tiene la columna de handicap en la celda 12 (`td[11]`, atributo `data-o`), que ahora se lee y normaliza.
+- Datos precargados (`data.json`) ya traen `handicap`; si falta, se rellena con el valor calculado en el extra-preview.
+
+Lógica backend (src/app.py)
+---------------------------
+1) Formateo de handicap seguro: `_format_handicap_display` recibe cualquier valor y devuelve la cadena decimal con `format_ah_as_decimal_string_of`.
+2) Normalización a bucket 0.5: `_normalize_bucket_value` usa `normalize_handicap_to_half_bucket_str` para comparar handicaps homogéneamente.
+3) Filtro por mismo handicap: `_filter_matches_by_handicap(matches, target, limit, must_be_home)` filtra listas de partidos por bucket de handicap y por localía (solo casa o solo fuera).
+4) Extracción ampliada de recientes: `_build_enhanced_preview_payload` ahora recoge hasta 15 recientes por equipo, calcula `handicap_current`/`handicap_bucket` y arma `same_handicap_matches` con:
+   - home: partidos del equipo local jugando en casa que coinciden en handicap
+   - away: partidos del visitante jugando fuera con el mismo handicap
+5) Cache y API:
+   - `/api/preview_basico`: si el handicap precargado viene vacío, se rellena con `handicap_current` del extra.
+   - Se mantiene cache en memoria (4 min) para la vista rápida.
+
+Lógica frontend (src/templates/index.html)
+------------------------------------------
+- Nueva sección “Mismo handicap (AH X)” en la pestaña de forma:
+  - Columna “Local en casa” y “Visitante fuera”, reuse de las mini-fichas de recientes (muestran liga, fecha, marcador, handicap y rol).
+  - Si no hay partidos con ese handicap, se muestra mensaje vacío.
+- El render de la vista rápida ahora consume `same_handicap_matches` del payload.
+
+Campos nuevos en el JSON de vista rápida
+----------------------------------------
+- `handicap_current`: handicap actual formateado (ej. “-1.5”).
+- `handicap_bucket`: bucket a 0.5 usado para comparar.
+- `same_handicap_matches`: objeto con `{handicap, bucket, home: [...], away: [...]}` donde cada partido incluye la misma estructura que los recientes (handicap, score, localía, etc.).
+
+Pruebas rápidas realizadas
+--------------------------
+- Parsing local con `py` y BeautifulSoup sobre `html_extraer/analisis.txt`: se encontraron handicaps (`-1.5` para Singapore U23 en casa) y el filtro devolvió 2 partidos coincidentes al buscar bucket -1.5.
+- Verificación de que los campos aparecen en el payload generado por `_build_enhanced_preview_payload`.
+
+Siguientes pasos recomendados
+-----------------------------
+- Reiniciar el servidor Flask para aplicar cambios.
+- Probar el ojito en la UI: verificar que el badge de handicap se muestra y que la sección “Mismo handicap” lista partidos o muestra el mensaje de vacío, según corresponda.

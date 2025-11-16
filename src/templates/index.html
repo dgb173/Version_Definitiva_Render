@@ -382,6 +382,46 @@
                 `;
             };
 
+            const renderSameHandicapColumn = (title, matches) => {
+                const body = matches.length
+                    ? matches.map(renderRecentMatch).join('')
+                    : '<p class="text-muted small mb-0">Sin partidos con ese handicap.</p>';
+                return `
+                    <div class="recent-column">
+                        <div class="recent-column-head">
+                            <span>${title}</span>
+                        </div>
+                        ${body}
+                    </div>
+                `;
+            };
+
+            const renderSameHandicapSection = (bundle) => {
+                if (!bundle) {
+                    return '';
+                }
+                const label = bundle.handicap || bundle.bucket || '-';
+                const homeMatches = safeArray(bundle.home);
+                const awayMatches = safeArray(bundle.away);
+                if (!homeMatches.length && !awayMatches.length) {
+                    return `
+                        <section class="preview-section">
+                            <div class="section-head">Mismo handicap (AH ${label})</div>
+                            <p class="text-muted small mb-0">Sin datos con ese handicap.</p>
+                        </section>
+                    `;
+                }
+                return `
+                    <section class="preview-section">
+                        <div class="section-head">Mismo handicap (AH ${label})</div>
+                        <div class="recent-columns">
+                            ${renderSameHandicapColumn('Local en casa', homeMatches)}
+                            ${renderSameHandicapColumn('Visitante fuera', awayMatches)}
+                        </div>
+                    </section>
+                `;
+            };
+
             const renderFutureMatch = (match) => {
                 const homeTeamClass = match.is_home ? 'team-chip team-main is-focus' : 'team-chip team-opponent';
                 const awayTeamClass = match.is_home ? 'team-chip team-opponent' : 'team-chip team-main is-focus';
@@ -473,38 +513,40 @@
                 return `<div class="comparatives-grid">${items.map(renderComparativeCard).join('')}</div>`;
             };
 
-            const renderQuickPreview = (data) => {
+                        const renderQuickPreview = (data) => {
                 const goalLineValue = data.goal_line || data.goal_line_alt || data.goal_line_decimal;
                 const handicap = data.handicap ? `<span class="badge badge-handicap me-2">AH ${data.handicap}</span>` : '';
                 const goalLine = goalLineValue ? `<span class="badge badge-goal">O/U ${goalLineValue}</span>` : '';
-                const statusLabel = data.section === 'finished_matches' ? 'Partido finalizado' : 'Próximo partido';
+                const statusLabel = data.section === 'finished_matches' ? 'Partido finalizado' : 'Proximo partido';
                 const recentForm = data.recent_form || {};
                 const upcoming = data.upcoming_matches || {};
                 const comparisons = data.direct_comparisons || [];
+                const sameHandicap = data.same_handicap_matches;
                 const scheduledLabel = data.time_display || data.time || data.time_obj;
                 return `
                     <div class="panel-card quick-preview">
                         <div class="panel-card-header">
                             <h2>${data.home_team || '-'} vs ${data.away_team || '-'}</h2>
                             <p class="text-muted mb-1">${data.competition || ''}</p>
-                            <p class="text-muted small mb-0">${statusLabel} · ${formatDisplayTime(scheduledLabel)}</p>
+                            <p class="text-muted small mb-0">${statusLabel} - ${formatDisplayTime(scheduledLabel)}</p>
                         </div>
                         <div class="panel-analysis">
                             <div class="mb-3">${handicap}${goalLine}</div>
                             <div class="preview-tabs" role="tablist">
-                                <button type="button" class="preview-tab active" data-preview-panel="form">Forma y próximos</button>
+                                <button type="button" class="preview-tab active" data-preview-panel="form">Forma y proximos</button>
                                 <button type="button" class="preview-tab" data-preview-panel="comparatives">Comparativas directas</button>
                             </div>
                             <div class="quick-preview-panel is-active" data-preview-panel="form">
                                 <section class="preview-section">
-                                    <div class="section-head">Últimos 5 partidos</div>
+                                    <div class="section-head">Ultimos 5 partidos</div>
                                     <div class="recent-columns">
                                         ${renderRecentColumn('Equipo local', recentForm.home)}
                                         ${renderRecentColumn('Equipo visitante', recentForm.away)}
                                     </div>
                                 </section>
+                                ${renderSameHandicapSection(sameHandicap)}
                                 <section class="preview-section">
-                                    <div class="section-head">Próximos 3 partidos</div>
+                                    <div class="section-head">Proximos 3 partidos</div>
                                     <div class="future-grid">
                                         ${renderFutureColumn('Equipo local', upcoming.home)}
                                         ${renderFutureColumn('Equipo visitante', upcoming.away)}
@@ -519,8 +561,7 @@
                     </div>
                 `;
             };
-
-            const renderAnalysis = (payload) => {
+const renderAnalysis = (payload) => {
                 const elapsed = payload.meta && typeof payload.meta.elapsed !== 'undefined'
                     ? `Generado en ${payload.meta.elapsed}s`
                     : '';
