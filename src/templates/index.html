@@ -217,7 +217,7 @@
                                         </div>
                                         <div class="match-actions">
                                             <button type="button" class="match-action" data-action="preview" aria-label="Vista rápida"><i class="fa-solid fa-eye"></i></button>
-                                            <button type="button" class="match-action" data-action="analysis" aria-label="Análisis completo"><i class="fa-solid fa-chart-line"></i></button>
+                                            <a href="{{ url_for('mostrar_estudio', match_id=card_id) }}" target="_blank" class="match-action" aria-label="Análisis completo"><i class="fa-solid fa-chart-line"></i></a>
                                         </div>
                                     </div>
                                 </div>
@@ -246,7 +246,7 @@
                                         </div>
                                         <div class="match-actions">
                                             <button type="button" class="match-action" data-action="preview" aria-label="Vista rápida"><i class="fa-solid fa-eye"></i></button>
-                                            <button type="button" class="match-action" data-action="analysis" aria-label="Análisis completo"><i class="fa-solid fa-chart-line"></i></button>
+                                            <a href="{{ url_for('mostrar_estudio', match_id=card_id) }}" target="_blank" class="match-action" aria-label="Análisis completo"><i class="fa-solid fa-chart-line"></i></a>
                                         </div>
                                     </div>
                                 </div>
