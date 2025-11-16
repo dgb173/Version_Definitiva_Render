@@ -978,7 +978,7 @@ def mostrar_estudio(match_id):
     upcoming_matches = (dataset.get('upcoming_matches') or [])[:20]
     finished_matches = (dataset.get('finished_matches') or [])[:20]
 
-    target_match_id = requested_match_id or _select_default_match_id(upcoming_matches, finished_matches)
+    target_match_id = match_id or _select_default_match_id(upcoming_matches, finished_matches)
 
     if not target_match_id:
         abort(404, description='No hay partidos disponibles para analizar.')
