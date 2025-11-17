@@ -1,25 +1,12 @@
-# Base ligero sin Playwright, solo Python y dependencias necesarias
-FROM python:3.11-slim
+# Imagen base con Playwright + Chromium listo (incluye Node y dependencias del sistema)
+FROM mcr.microsoft.com/playwright/python:v1.55.0-jammy
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Dependencias del sistema para lxml, pandas y librerias SSL
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    wget \
-    libxml2-dev \
-    libxslt-dev \
-    libffi-dev \
-    libssl-dev \
-    libjpeg62-turbo-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
-COPY playwright_stub ./playwright_stub
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .

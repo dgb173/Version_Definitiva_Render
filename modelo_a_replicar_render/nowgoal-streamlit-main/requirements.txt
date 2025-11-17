@@ -1,0 +1,13 @@
+streamlit==1.45.1
+selenium
+gspread
+# gspread_dataframe # Parece que no lo usas directamente, si es así, puedes quitarlo. Si alguna función lo usa, mantenlo.
+lxml
+beautifulsoup4
+pandas
+playwright
+streamlit
+selenium
+beautifulsoup4
+pandas
+webdriver-manager

@@ -1,4 +1,3 @@
-aiohttp==3.9.5
 attrs==25.4.0
 beautifulsoup4==4.14.2
 blinker==1.9.0
@@ -9,7 +8,6 @@ click==8.3.0
 colorama==0.4.6
 Flask==3.1.2
 greenlet==3.2.4
-gunicorn==22.0.0
 h11==0.16.0
 idna==3.10
 itsdangerous==2.2.0
@@ -20,7 +18,7 @@ numpy==2.3.3
 outcome==1.3.0.post0
 packaging==25.0
 pandas==2.3.3
-cloudscraper==1.2.71
+playwright==1.55.0
 pycparser==2.23
 pyee==13.0.0
 PySocks==1.7.1
@@ -42,4 +40,5 @@ webdriver-manager==4.0.2
 websocket-client==1.9.0
 Werkzeug==3.1.3
 wsproto==1.2.0
-./playwright_stub
+aiohttp==3.9.5
+gunicorn==22.0.0

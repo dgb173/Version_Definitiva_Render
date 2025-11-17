@@ -1,0 +1,770 @@
+# -*- coding: utf-8 -*-
+# ✅ CELDA 1: INSTALAR DEPENDENCIAS + SUBIR CREDENCIALES
+!apt-get update && apt-get install -y chromium-chromedriver
+!cp /usr/lib/chromium-browser/chromedriver /usr/bin
+!pip install selenium gspread gspread_dataframe beautifulsoup4 lxml psutil
+
+from google.colab import files
+import os
+import psutil
+
+print("📂 Por favor, sube tu archivo de credenciales .json:")
+try:
+    uploaded = files.upload()
+    auth_filename = next(iter(uploaded.keys()))
+    print(f"✅ Archivo de credenciales subido: {auth_filename}")
+except StopIteration: print("❌ No se subió ningún archivo."); exit()
+except Exception as e: print(f"❌ Error al subir archivo: {e}"); exit()
+
+
+# ✅ CELDA 2: CONFIGURACIÓN Y CONEXIÓN (CONCURRENCIA SELENIUM)
+import time
+import json
+import re
+import pandas as pd
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import gspread
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import random
+
+
+# --- MANEJO DE CREDENCIALES ---
+CREDENTIALS_FILENAME = "/content/upheld-quanta-407416-82814c61f993.json" # O el nombre que uses
+auth_filename = None
+print("🔄 Verificando archivo de credenciales...")
+if os.path.exists(CREDENTIALS_FILENAME):
+    print(f"✅ Archivo '{CREDENTIALS_FILENAME}' encontrado.")
+    auth_filename = CREDENTIALS_FILENAME
+else:
+    print(f"ℹ️ Archivo '{CREDENTIALS_FILENAME}' no encontrado.")
+    print(f"📂 Por favor, sube tu archivo de credenciales (idealmente llamado '{os.path.basename(CREDENTIALS_FILENAME)}'):")
+    try:
+        uploaded = files.upload()
+        if not uploaded:
+            print("❌ No se subió ningún archivo."); exit()
+        uploaded_filename_temp = next(iter(uploaded.keys()))
+        # Lógica para renombrar si es necesario (puedes simplificarla si siempre subes con el nombre correcto)
+        if uploaded_filename_temp != os.path.basename(CREDENTIALS_FILENAME) and uploaded_filename_temp.endswith('.json'):
+            target_path = os.path.join("/content/", os.path.basename(CREDENTIALS_FILENAME))
+            print(f"   Subido: '{uploaded_filename_temp}'. Renombrando a '{target_path}'...")
+            try:
+                os.rename(os.path.join("/content/", uploaded_filename_temp), target_path)
+                auth_filename = target_path
+                print(f"✅ Archivo listo: '{auth_filename}'")
+            except OSError as e_rename:
+                print(f"❌ Error renombrando: {e_rename}. Usando nombre original '{uploaded_filename_temp}'")
+                auth_filename = os.path.join("/content/", uploaded_filename_temp)
+        else:
+            auth_filename = os.path.join("/content/", uploaded_filename_temp)
+            print(f"✅ Archivo subido: '{auth_filename}'")
+    except Exception as e: print(f"❌ Error subida: {e}"); exit()
+
+if not auth_filename or not os.path.exists(auth_filename): # Doble chequeo
+    print(f"❌ Archivo de credenciales '{auth_filename}' no encontrado o no válido. Saliendo."); exit()
+print(f"👍 Usando credenciales: '{auth_filename}'")
+
+
+# --- CONFIGURACIÓN GENERAL ---
+ARCHIVO_JSON = auth_filename
+NOMBRE_SHEET = "Datos"
+EXTRACTION_RANGES = [
+{'start_id': 2654543, 'end_id': 2654043, 'label': 'Prueba Corta'},
+{'start_id': 2654043, 'end_id': 2653543, 'label': 'Prueba Corta'},
+{'start_id': 2653543, 'end_id': 2653043, 'label': 'Prueba Corta'},
+{'start_id': 2653043, 'end_id': 2652543, 'label': 'Prueba Corta'},
+{'start_id': 2652543, 'end_id': 2652043, 'label': 'Prueba Corta'},
+{'start_id': 2652043, 'end_id': 2651543, 'label': 'Prueba Corta'},
+{'start_id': 2651543, 'end_id': 2651043, 'label': 'Prueba Corta'},
+{'start_id': 2651043, 'end_id': 2650543, 'label': 'Prueba Corta'},
+{'start_id': 2650543, 'end_id': 2650043, 'label': 'Prueba Corta'},
+{'start_id': 2650043, 'end_id': 2649543, 'label': 'Prueba Corta'},
+{'start_id': 2649543, 'end_id': 2649043, 'label': 'Prueba Corta'},
+{'start_id': 2649043, 'end_id': 2648543, 'label': 'Prueba Corta'},
+{'start_id': 2648543, 'end_id': 2648043, 'label': 'Prueba Corta'},
+{'start_id': 2648043, 'end_id': 2647543, 'label': 'Prueba Corta'},
+{'start_id': 2647543, 'end_id': 2647043, 'label': 'Prueba Corta'},
+{'start_id': 2647043, 'end_id': 2646543, 'label': 'Prueba Corta'},
+{'start_id': 2646543, 'end_id': 2646043, 'label': 'Prueba Corta'},
+{'start_id': 2646043, 'end_id': 2645543, 'label': 'Prueba Corta'},
+{'start_id': 2645543, 'end_id': 2645043, 'label': 'Prueba Corta'},
+{'start_id': 2645043, 'end_id': 2644543, 'label': 'Prueba Corta'},
+
+
+
+    # {'start_id': 2775557, 'end_id': 2775557, 'label': 'ID Ejemplo'},
+]
+NOMBRE_HOJA_NEG_CERO = "Hoja 12"
+NOMBRE_HOJA_POSITIVOS = "Hoja 13"
+MAX_WORKERS = 2  # Aumentas el paralelismo
+
+SELENIUM_TIMEOUT = 120  # Aumentas margen de espera por si alguna web tarda
+WORKER_START_DELAY = random.uniform(0.5, 1.5)  # Delay mínimo entre workers para evitar colisiones
+
+INTER_ID_SUBMIT_DELAY = 0.1  # Evita que se salte elementos (0.03 es demasiado agresivo)
+BATCH_SIZE = 100  # Puedes ajustar según memoria/RAM disponible
+
+RETRY_DELAY_GSPREAD = 15  # Retraso más corto si falla conexión con Google Sheets
+API_PAUSE = 0.5  # Reduce este valor si tus requests no son bloqueados
+
+
+# -*- coding: utf-8 -*-
+# ✅ CELDA 1: INSTALAR DEPENDENCIAS + SUBIR CREDENCIALES
+!apt-get update && apt-get install -y chromium-chromedriver
+!cp /usr/lib/chromium-browser/chromedriver /usr/bin
+!pip install selenium gspread gspread_dataframe beautifulsoup4 lxml psutil
+
+from google.colab import files
+import os
+import psutil
+
+print("📂 Por favor, sube tu archivo de credenciales .json:")
+try:
+    uploaded = files.upload()
+    auth_filename = next(iter(uploaded.keys()))
+    print(f"✅ Archivo de credenciales subido: {auth_filename}")
+except StopIteration: print("❌ No se subió ningún archivo."); exit()
+except Exception as e: print(f"❌ Error al subir archivo: {e}"); exit()
+
+
+# ✅ CELDA 2: CONFIGURACIÓN Y CONEXIÓN (CONCURRENCIA SELENIUM)
+import time
+import json
+import re
+import pandas as pd
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import gspread
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import random
+
+
+# --- MANEJO DE CREDENCIALES ---
+CREDENTIALS_FILENAME = "/content/upheld-quanta-407416-82814c61f993.json" # O el nombre que uses
+auth_filename = None
+print("🔄 Verificando archivo de credenciales...")
+if os.path.exists(CREDENTIALS_FILENAME):
+    print(f"✅ Archivo '{CREDENTIALS_FILENAME}' encontrado.")
+    auth_filename = CREDENTIALS_FILENAME
+else:
+    print(f"ℹ️ Archivo '{CREDENTIALS_FILENAME}' no encontrado.")
+    print(f"📂 Por favor, sube tu archivo de credenciales (idealmente llamado '{os.path.basename(CREDENTIALS_FILENAME)}'):")
+    try:
+        uploaded = files.upload()
+        if not uploaded:
+            print("❌ No se subió ningún archivo."); exit()
+        uploaded_filename_temp = next(iter(uploaded.keys()))
+        # Lógica para renombrar si es necesario (puedes simplificarla si siempre subes con el nombre correcto)
+        if uploaded_filename_temp != os.path.basename(CREDENTIALS_FILENAME) and uploaded_filename_temp.endswith('.json'):
+            target_path = os.path.join("/content/", os.path.basename(CREDENTIALS_FILENAME))
+            print(f"   Subido: '{uploaded_filename_temp}'. Renombrando a '{target_path}'...")
+            try:
+                os.rename(os.path.join("/content/", uploaded_filename_temp), target_path)
+                auth_filename = target_path
+                print(f"✅ Archivo listo: '{auth_filename}'")
+            except OSError as e_rename:
+                print(f"❌ Error renombrando: {e_rename}. Usando nombre original '{uploaded_filename_temp}'")
+                auth_filename = os.path.join("/content/", uploaded_filename_temp)
+        else:
+            auth_filename = os.path.join("/content/", uploaded_filename_temp)
+            print(f"✅ Archivo subido: '{auth_filename}'")
+    except Exception as e: print(f"❌ Error subida: {e}"); exit()
+
+if not auth_filename or not os.path.exists(auth_filename): # Doble chequeo
+    print(f"❌ Archivo de credenciales '{auth_filename}' no encontrado o no válido. Saliendo."); exit()
+print(f"👍 Usando credenciales: '{auth_filename}'")
+
+
+# --- CONFIGURACIÓN GENERAL ---
+ARCHIVO_JSON = auth_filename
+NOMBRE_SHEET = "Datos"
+EXTRACTION_RANGES = [
+{'start_id': 2610938, 'end_id': 2610711, 'label': 'Prueba Corta'},
+
+
+
+
+    # {'start_id': 2775557, 'end_id': 2775557, 'label': 'ID Ejemplo'},
+]
+NOMBRE_HOJA_NEG_CERO = "Visitantes"
+NOMBRE_HOJA_POSITIVOS = "Locales"
+MAX_WORKERS = 4  # Aumentas el paralelismo
+
+SELENIUM_TIMEOUT = 120  # Aumentas margen de espera por si alguna web tarda
+WORKER_START_DELAY = random.uniform(0.5, 1.5)  # Delay mínimo entre workers para evitar colisiones
+
+INTER_ID_SUBMIT_DELAY = 0.1  # Evita que se salte elementos (0.03 es demasiado agresivo)
+BATCH_SIZE = 100  # Puedes ajustar según memoria/RAM disponible
+
+RETRY_DELAY_GSPREAD = 15  # Retraso más corto si falla conexión con Google Sheets
+API_PAUSE = 0.5  # Reduce este valor si tus requests no son bloqueados
+
+
+# --- CONEXIÓN GOOGLE SHEETS ---
+print(f"\nConectando a Google Sheets ('{NOMBRE_SHEET}')...")
+gc = None
+sh = None
+try:
+    gc = gspread.service_account(filename=ARCHIVO_JSON)
+    sh = gc.open(NOMBRE_SHEET)
+    print(f"✅ Conexión exitosa a '{NOMBRE_SHEET}'.")
+except Exception as e: print(f"❌ Error crítico GSheets: {e}"); exit()
+
+# --- FUNCIONES HELPER PARA NÚMEROS ---
+def parse_ah_to_number(ah_line_str: str):
+    if not isinstance(ah_line_str, str): return None
+    s = ah_line_str.strip().replace(' ', '')
+    if not s or s in ['-', '?']: return None
+    original_starts_with_minus = ah_line_str.strip().startswith('-')
+    try:
+        if '/' in s:
+            parts = s.split('/')
+            if len(parts) != 2: return None
+            p1_str, p2_str = parts[0], parts[1]
+            try: val1 = float(p1_str)
+            except ValueError: return None
+            try: val2 = float(p2_str)
+            except ValueError: return None
+            if val1 < 0 and not p2_str.startswith('-') and val2 > 0:
+                val2 = -abs(val2)
+            elif original_starts_with_minus and val1 == 0.0 and \
+                 (p1_str == "0" or p1_str == "-0") and \
+                 not p2_str.startswith('-') and val2 > 0:
+                val2 = -abs(val2)
+            return (val1 + val2) / 2.0
+        else:
+            return float(s)
+    except ValueError:
+        return None
+
+def format_ah_as_decimal_string(ah_line_str: str):
+    if not isinstance(ah_line_str, str) or not ah_line_str.strip() or ah_line_str.strip() in ['-', '?']:
+        return ah_line_str.strip() if isinstance(ah_line_str, str) else '-'
+    numeric_value = parse_ah_to_number(ah_line_str)
+    if numeric_value is None:
+        return ah_line_str.strip() if isinstance(ah_line_str, str) else '-'
+    if numeric_value == 0.0:
+        return "0"
+    sign = -1 if numeric_value < 0 else 1
+    abs_num = abs(numeric_value)
+    parte_entera = math.floor(abs_num)
+    parte_decimal_original = round(abs_num - parte_entera, 4)
+    nueva_parte_decimal = parte_decimal_original
+    epsilon = 1e-9
+    if abs(parte_decimal_original - 0.25) < epsilon:
+        nueva_parte_decimal = 0.5
+    elif abs(parte_decimal_original - 0.75) < epsilon:
+        nueva_parte_decimal = 0.5
+    resultado_num_redondeado = parte_entera + nueva_parte_decimal
+    final_value_signed = sign * resultado_num_redondeado
+    if final_value_signed == 0.0:
+        return "0"
+    output_str = ""
+    if abs(final_value_signed - round(final_value_signed, 0)) < epsilon:
+        output_str = str(int(round(final_value_signed, 0)))
+    else:
+        output_str = f"{final_value_signed:.1f}"
+    return output_str
+
+# --- OTRAS FUNCIONES HELPER (get_chrome_options, get_match_details_from_row, etc.) ---
+def get_chrome_options():
+    chrome_opts = Options()
+    chrome_opts.add_argument('--headless')
+    chrome_opts.add_argument('--no-sandbox')
+    chrome_opts.add_argument('--disable-dev-shm-usage')
+    chrome_opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36")
+    chrome_opts.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_opts.add_argument("--disable-gpu")
+    chrome_opts.add_argument('--blink-settings=imagesEnabled=false')
+    prefs = {"profile.managed_default_content_settings.images": 2,
+             "profile.default_content_setting_values.notifications": 2}
+    chrome_opts.add_experimental_option("prefs", prefs)
+    chrome_opts.add_argument("--window-size=1280x720")
+    return chrome_opts
+
+def get_match_details_from_row(row_element, score_class_selector='score'):
+    try:
+        cells = row_element.find_all('td')
+        if len(cells) < 12: return None
+        league_id_hist = row_element.get('name')
+        home_idx, score_idx, away_idx, ah_idx = 2, 3, 4, 11
+        home_tag = cells[home_idx].find('a')
+        home = home_tag.text.strip() if home_tag else cells[home_idx].text.strip()
+        away_tag = cells[away_idx].find('a')
+        away = away_tag.text.strip() if away_tag else cells[away_idx].text.strip()
+        score_cell_content = cells[score_idx].text.strip()
+        score_span = cells[score_idx].find('span', class_=lambda x: x and score_class_selector in x)
+        score_raw_text = score_span.text.strip() if score_span else score_cell_content
+        score_m = re.match(r'(\d+-\d+)', score_raw_text)
+        score_raw = score_m.group(1) if score_m else '?-?'
+        score_fmt = score_raw.replace('-', '*') if score_raw != '?-?' else '?*?'
+        ah_line_raw_text = cells[ah_idx].text.strip()
+        ah_line_fmt = format_ah_as_decimal_string(ah_line_raw_text) # <--- USA LA FUNCIÓN CORRECTA
+        if not home or not away: return None
+        return {'home': home, 'away': away, 'score': score_fmt, 'score_raw': score_raw,
+                'ahLine': ah_line_fmt, 'ahLine_raw': ah_line_raw_text,
+                'matchIndex': row_element.get('index'),
+                'vs': row_element.get('vs'),
+                'league_id_hist': league_id_hist}
+    except Exception as e:
+        return None
+
+def safe_int(value, default=0):
+    try:
+        cleaned = ''.join(filter(str.isdigit, str(value)))
+        return int(cleaned) if cleaned else default
+    except (ValueError, TypeError): return default
+
+def extract_team_stats_from_summary(soup_obj, table_selector, is_home_team, mid):
+    stats = {'nombre': 'N/A', 'total_matches': 0, 'total_w': 0, 'total_d': 0, 'total_l': 0, 'total_gf': 0, 'total_ga': 0, 'total_rank': 'N/A',
+             'loc_aw_matches': 0, 'loc_aw_w': 0, 'loc_aw_d': 0, 'loc_aw_l': 0, 'loc_aw_gf': 0, 'loc_aw_ga': 0,
+             'loc_aw_label': 'Home' if is_home_team else 'Away'}
+    try:
+        table = soup_obj.select_one(table_selector)
+        if not table: return None
+        rows = table.find_all('tr')
+        if len(rows) < 4: return None
+        name_tag = rows[0].find('a')
+        temp_name = name_tag.text.strip() if name_tag else rows[0].text.strip()
+        stats['nombre'] = re.sub(r'^\[.*?\]\s*', '', temp_name).strip()
+        total_row_idx, loc_aw_row_idx = 2, 4
+        if len(rows) > total_row_idx:
+            t_cells = rows[total_row_idx].find_all('td')
+            if len(t_cells) > 8:
+                 stats.update({ 'total_matches': safe_int(t_cells[1].text), 'total_w': safe_int(t_cells[2].text),
+                           'total_d': safe_int(t_cells[3].text), 'total_l': safe_int(t_cells[4].text),
+                           'total_gf': safe_int(t_cells[5].text), 'total_ga': safe_int(t_cells[6].text),
+                           'total_rank': t_cells[8].text.strip() if t_cells[8].text.strip().isdigit() else 'N/A' })
+        if len(rows) > loc_aw_row_idx:
+            la_cells = rows[loc_aw_row_idx].find_all('td')
+            if len(la_cells) > 6:
+                 label_text = la_cells[0].text.strip()
+                 if (is_home_team and "Home" in label_text) or (not is_home_team and "Away" in label_text):
+                     stats['loc_aw_label'] = label_text
+                 stats.update({ 'loc_aw_matches': safe_int(la_cells[1].text), 'loc_aw_w': safe_int(la_cells[2].text),
+                           'loc_aw_d': safe_int(la_cells[3].text), 'loc_aw_l': safe_int(la_cells[4].text),
+                           'loc_aw_gf': safe_int(la_cells[5].text), 'loc_aw_ga': safe_int(la_cells[6].text) })
+        return stats
+    except Exception as e_stats_sum:
+        return None
+
+# --- FUNCIÓN PRINCIPAL DE EXTRACCIÓN POR PARTIDO ---
+def extract_match_worker(driver_instance, mid):
+    url = f"https://live16.nowgoal25.com/match/h2h-{mid}"
+    html = None
+    soup = None
+    time.sleep(WORKER_START_DELAY)
+
+    try:
+        driver_instance.get(url)
+        WebDriverWait(driver_instance, SELENIUM_TIMEOUT).until(
+             EC.any_of(
+                 EC.presence_of_element_located((By.CSS_SELECTOR, '#table_v3')),
+                 EC.presence_of_element_located((By.CSS_SELECTOR, 'div.crumbs')),
+                 EC.presence_of_element_located((By.CSS_SELECTOR, 'body[errorpage]'))
+             )
+        )
+        time.sleep(0.5) # Reducir si es posible, o ajustar
+        html = driver_instance.page_source
+        if "match not found" in html.lower() or "evento no encontrado" in html.lower() \
+           or "the match is not found" in html.lower() or '<body errorpage' in html.lower():
+             return mid, 'not_found', url
+        soup = BeautifulSoup(html, 'lxml')
+    except Exception as e_load:
+        return mid, 'load_error', (url, f"{type(e_load).__name__}: {str(e_load)[:100]}")
+
+    if soup is None : return mid, 'load_error', (url, "Soup object is None after page load.")
+
+
+    ah1, res1, res1Raw = '-', '?*?', '?-?'
+    ah_curr_str, goals_curr_str = '?', '?'
+    ah_curr_num = None
+    res3, res3Raw = '-', '?-?'
+    ah4, res4, res4Raw = '-', '?*?', '?-?'
+    ah5, res5, res5Raw = '-', '?*?', '?-?'
+    ah6, res6, res6Raw = '-', '?*?', '?-?'
+    comp7, comp8 = '-', '-'
+    finalScoreFmt, finalScoreRaw = '?*?', "?-?"
+    localStatsStr, visitorStatsStr = "Stats L: N/A", "Stats V: N/A"
+    league_name = 'League N/A'
+    current_league_id = None
+
+    try:
+        # 1. Liga (Nombre e ID)
+        crumbs_league_link = soup.select_one('div.crumbs a[href*="/leagueinfo/"]')
+        if crumbs_league_link:
+            league_name_temp = crumbs_league_link.text.strip()
+            if league_name_temp: league_name = league_name_temp
+            href_val = crumbs_league_link.get('href', '')
+            id_match_href = re.search(r'leagueinfo/(\d+)', href_val)
+            if id_match_href: current_league_id = id_match_href.group(1)
+
+        if not current_league_id or league_name == 'League N/A':
+            header_league_span = soup.select_one('span.LName span.nosclassLink')
+            if header_league_span:
+                league_name_temp_header = header_league_span.text.strip()
+                if league_name_temp_header : league_name = league_name_temp_header
+                if not current_league_id:
+                    onclick_val = header_league_span.get('onclick', '')
+                    id_match_onclick = re.search(r'leagueinfo/(\d+)', onclick_val)
+                    if id_match_onclick: current_league_id = id_match_onclick.group(1)
+
+        # 2. AH Actual y Goles
+        ah_raw, goals_raw = "?", "?"
+        try:
+            odds_row = soup.select_one('#liveCompareDiv #tr_o_1_8[name="earlyOdds"]')
+            if not odds_row : odds_row = soup.select_one('#liveCompareDiv #tr_o_1_31[name="earlyOdds"]')
+            if not odds_row : odds_row = soup.select_one('#tr_o_1_8[name="earlyOdds"]')
+            if odds_row:
+                cells = odds_row.find_all('td')
+                if len(cells) > 3: ah_raw = cells[3].text.strip()
+                if len(cells) > 9: goals_raw = cells[9].text.strip()
+
+            # USO CORRECTO DE LAS FUNCIONES:
+            ah_curr_num = parse_ah_to_number(ah_raw)    # Obtiene el float para la lógica (ej: -2.25)
+            ah_curr_str = format_ah_as_decimal_string(ah_raw) # Obtiene string formateado con redondeo y PUNTO (ej: "-2.5")
+            goals_curr_str = format_ah_as_decimal_string(goals_raw)
+
+        except Exception as e_odds_cur:
+            ah_curr_str, goals_curr_str = '?', '?'
+            ah_curr_num = None # IMPORTANTE
+
+        # 3. Marcador Final
+        try:
+            score_divs = soup.select('#mScore .end .score')
+            if len(score_divs) == 2:
+                hs, aws = score_divs[0].text.strip(), score_divs[1].text.strip()
+                if hs.isdigit() and aws.isdigit():
+                    finalScoreRaw = f"{hs}-{aws}"
+                    finalScoreFmt = finalScoreRaw.replace('-', '*')
+        except: pass
+
+        # 4. Equipos y Tablas
+        home_name_actual, away_name_actual = None, None
+        try:
+            home_name_tag_header = soup.select_one('div.fbheader div.home div.sclassName a') or \
+                                   soup.select_one('div.fbheader div.home div.sclassName') # Fallback si no hay <a>
+            away_name_tag_header = soup.select_one('div.fbheader div.guest div.sclassName a') or \
+                                   soup.select_one('div.fbheader div.guest div.sclassName')
+
+            if home_name_tag_header: home_name_actual = home_name_tag_header.text.strip()
+            if away_name_tag_header: away_name_actual = away_name_tag_header.text.strip()
+
+            if not home_name_actual or not away_name_actual:
+                 ht_hist_tag = soup.select_one('#table_v1 a.team-home-f') or soup.select_one('#table_v1 .team-home a')
+                 at_hist_tag = soup.select_one('#table_v2 a.team-away-f') or soup.select_one('#table_v2 .team-guest a')
+                 if ht_hist_tag and not home_name_actual: home_name_actual = re.sub(r'^\[.*?\]\s*', '', ht_hist_tag.text.strip()).strip()
+                 if at_hist_tag and not away_name_actual: away_name_actual = re.sub(r'^\[.*?\]\s*', '', at_hist_tag.text.strip()).strip()
+
+            if not home_name_actual or not away_name_actual:
+                return mid, 'parse_error', (url, "Missing team names")
+
+            t1 = soup.select_one('#table_v1'); t2 = soup.select_one('#table_v2'); t3 = soup.select_one('#table_v3')
+            home_history_rows = t1.select('tr[id^="tr1_"]') if t1 else []
+            away_history_rows = t2.select('tr[id^="tr2_"]') if t2 else []
+            h2h_history_rows = t3.select('tr[id^="tr3_"]') if t3 else []
+        except Exception as e_teams:
+             return mid, 'parse_error', (url, f"Error teams/tables: {e_teams}")
+
+        # 5. Procesar Historiales (usando get_match_details_from_row que ya usa format_ah_as_decimal_string)
+        # ... (tu lógica existente para H2H, Local, Visitante - no la cambio) ...
+        h2h_v_match_details, h2h_ov_match_details = None, None
+        filtered_h2h_list = []
+        for row_h2h in h2h_history_rows:
+            d = get_match_details_from_row(row_h2h, 'fscore_3')
+            if not d: continue
+            if current_league_id and d.get('league_id_hist') and d.get('league_id_hist') != current_league_id: continue
+            filtered_h2h_list.append(d)
+        if filtered_h2h_list:
+            h2h_ov_match_details = filtered_h2h_list[0]
+            for d_h2h_f in filtered_h2h_list:
+                if home_name_actual and d_h2h_f.get('home') == home_name_actual:
+                    h2h_v_match_details = d_h2h_f; break
+        if h2h_v_match_details:
+            ah1, res1, res1Raw = h2h_v_match_details.get('ahLine', '-'), h2h_v_match_details.get('score', '?*?'), h2h_v_match_details.get('score_raw', '?-?')
+            res3, res3Raw = res1, res1Raw
+        else: ah1, res1, res1Raw, res3, res3Raw = '-', '?*?', '?-?', '-', '?-?'
+        if h2h_ov_match_details:
+            is_different_from_v = not h2h_v_match_details or (h2h_v_match_details and h2h_ov_match_details.get('matchIndex') != h2h_v_match_details.get('matchIndex'))
+            if is_different_from_v:
+                ah6, res6, res6Raw = h2h_ov_match_details.get('ahLine', '-'), h2h_ov_match_details.get('score', '?*?'), h2h_ov_match_details.get('score_raw', '?-?')
+                if not h2h_v_match_details and res3 == '-': res3, res3Raw = res6, res6Raw
+            elif not h2h_v_match_details:
+                ah6, res6, res6Raw = h2h_ov_match_details.get('ahLine', '-'), h2h_ov_match_details.get('score', '?*?'), h2h_ov_match_details.get('score_raw', '?-?')
+                if res3 == '-': res3, res3Raw = res6, res6Raw
+        last_home_details, last_home_opp = None, None
+        for row_home in home_history_rows:
+            if row_home.get('vs') == '1':
+                d = get_match_details_from_row(row_home, 'fscore_1')
+                if not d: continue
+                if current_league_id and d.get('league_id_hist') and d.get('league_id_hist') != current_league_id: continue
+                if home_name_actual and d.get('home') == home_name_actual: last_home_details = d; break
+        if last_home_details:
+            ah4, res4, res4Raw = last_home_details.get('ahLine', '-'), last_home_details.get('score', '?*?'), last_home_details.get('score_raw', '?-?')
+            last_home_opp = last_home_details.get('away')
+        last_away_details, last_away_opp_host = None, None
+        for row_away in away_history_rows:
+            if row_away.get('vs') == '1':
+                d = get_match_details_from_row(row_away, 'fscore_2')
+                if not d: continue
+                if current_league_id and d.get('league_id_hist') and d.get('league_id_hist') != current_league_id: continue
+                if away_name_actual and d.get('away') == away_name_actual: last_away_details = d; break
+        if last_away_details:
+            ah5, res5, res5Raw = last_away_details.get('ahLine', '-'), last_away_details.get('score', '?*?'), last_away_details.get('score_raw', '?-?')
+            last_away_opp_host = last_away_details.get('home')
+        comp7, comp8 = '-', '-'
+        if last_away_opp_host and home_history_rows:
+             for row_comp7 in home_history_rows:
+                d = get_match_details_from_row(row_comp7, 'fscore_1')
+                if not d: continue
+                if current_league_id and d.get('league_id_hist') and d.get('league_id_hist') != current_league_id: continue
+                loc_c7 = ''
+                if d.get('home') == home_name_actual and d.get('away') == last_away_opp_host: loc_c7 = 'H'
+                elif d.get('away') == home_name_actual and d.get('home') == last_away_opp_host: loc_c7 = 'A'
+                if loc_c7: comp7 = f"{d.get('score', '?*?')}/{d.get('ahLine', '-')} {loc_c7}".strip(); break
+        if last_home_opp and away_history_rows:
+            for row_comp8 in away_history_rows:
+                d = get_match_details_from_row(row_comp8, 'fscore_2')
+                if not d: continue
+                if current_league_id and d.get('league_id_hist') and d.get('league_id_hist') != current_league_id: continue
+                loc_c8 = ''
+                if d.get('home') == away_name_actual and d.get('away') == last_home_opp: loc_c8 = 'H'
+                elif d.get('away') == away_name_actual and d.get('home') == last_home_opp: loc_c8 = 'A'
+                if loc_c8: comp8 = f"{d.get('score', '?*?')}/{d.get('ahLine', '-')} {loc_c8}".strip(); break
+
+        # 7. Estadísticas
+        home_stats_sum = extract_team_stats_from_summary(soup, 'table.team-table-home', True, mid)
+        guest_stats_sum = extract_team_stats_from_summary(soup, 'table.team-table-guest', False, mid)
+        if home_stats_sum:
+            localStatsStr = (f"🏆Rk:{home_stats_sum['total_rank']} 🏠{home_stats_sum['loc_aw_label']}\n"
+                             f"🌍T:{home_stats_sum['total_matches']}|{home_stats_sum['total_w']}/{home_stats_sum['total_d']}/{home_stats_sum['total_l']}|{home_stats_sum['total_gf']}-{home_stats_sum['total_ga']}\n"
+                             f"🏡L:{home_stats_sum['loc_aw_matches']}|{home_stats_sum['loc_aw_w']}/{home_stats_sum['loc_aw_d']}/{home_stats_sum['loc_aw_l']}|{home_stats_sum['loc_aw_gf']}-{home_stats_sum['loc_aw_ga']}")
+        if guest_stats_sum:
+            visitorStatsStr = (f"🏆Rk:{guest_stats_sum['total_rank']} ✈️{guest_stats_sum['loc_aw_label']}\n"
+                               f"🌍T:{guest_stats_sum['total_matches']}|{guest_stats_sum['total_w']}/{guest_stats_sum['total_d']}/{guest_stats_sum['total_l']}|{guest_stats_sum['total_gf']}-{guest_stats_sum['total_ga']}\n"
+                               f"🛫V:{guest_stats_sum['loc_aw_matches']}|{guest_stats_sum['loc_aw_w']}/{guest_stats_sum['loc_aw_d']}/{guest_stats_sum['loc_aw_l']}|{guest_stats_sum['loc_aw_gf']}-{guest_stats_sum['loc_aw_ga']}")
+
+    except Exception as main_extract_e:
+         return mid, 'parse_error', (url, f"Detailed parse error: {main_extract_e}")
+
+    # PREPARACIÓN FINAL DE LA FILA PARA GOOGLE SHEETS
+    final_row_data = [
+        ah1, ah_curr_str, res3, ah4, res4, ah5, res5, ah6, res6,
+        comp7, comp8, localStatsStr, visitorStatsStr,
+        finalScoreFmt, goals_curr_str, league_name, str(mid)
+    ]
+
+    formatted_final_row = []
+    for v_format_item in final_row_data:
+        val_str = str(v_format_item) if v_format_item is not None else '-'
+        final_display_str_para_sheets = val_str
+        is_purely_numeric_for_comma = False
+        try:
+            float(val_str)
+            is_purely_numeric_for_comma = True
+        except ValueError:
+            is_purely_numeric_for_comma = False
+
+        if val_str == str(mid) or \
+           '*' in val_str or \
+           val_str.startswith("Stats") or \
+           val_str == league_name or \
+           val_str in ('-', '?', '?*?', 'N/A'):
+            is_purely_numeric_for_comma = False
+
+        if is_purely_numeric_for_comma:
+            final_display_str_para_sheets = val_str.replace('.', ',')
+            if not final_display_str_para_sheets.startswith("'"):
+                 formatted_final_row.append("'" + final_display_str_para_sheets)
+            else:
+                 formatted_final_row.append(final_display_str_para_sheets)
+        else:
+            formatted_final_row.append(final_display_str_para_sheets)
+
+    # Decisión de hoja y return
+    if ah_curr_str == '?': # ah_curr_str es el string de format_ah_as_decimal_string (ej: "-2.5", "?")
+        return mid, 'skipped', None
+    else:
+        # ah_curr_num es el float de parse_ah_to_number (ej: -2.25)
+        return mid, 'ok', (formatted_final_row, ah_curr_num)
+
+# --- FUNCIÓN WORKER TASK (SIN CAMBIOS IMPORTANTES DE LÓGICA INTERNA) ---
+def worker_task(mid_param):
+    driver = None
+    try:
+        opts = get_chrome_options()
+        # Puedes añadir un pequeño retraso aleatorio ANTES de crear el driver si sigues teniendo problemas de concurrencia
+        # time.sleep(random.uniform(0.1, 0.5))
+        driver = webdriver.Chrome(options=opts)
+        result = extract_match_worker(driver, mid_param)
+        return result
+    except Exception as e_worker_init:
+        return mid_param, 'load_error', ('driver_init', str(e_worker_init))
+    finally:
+        if driver:
+            try:
+                # time.sleep(0.1) # Pequeña pausa antes de cerrar
+                driver.quit()
+            except: pass # Ignorar errores al cerrar, es menos crítico
+
+# --- FUNCIÓN DE SUBIDA (upload_data_to_sheet - SIN CAMBIOS IMPORTANTES DE LÓGICA INTERNA) ---
+def upload_data_to_sheet(worksheet_name, data_rows, columns_list, sheet_handle, batch_size, api_pause, retry_delay_gs):
+    # ... (tu función de subida, parece estar bien) ...
+    print(f"\n--- Iniciando subida para '{worksheet_name}' ({len(data_rows)} filas) ---")
+    if not data_rows: print(f"  ✅ No hay datos nuevos para subir a '{worksheet_name}'."); return True
+    try:
+        df = pd.DataFrame(data_rows, columns=columns_list)
+        if df.empty: print(f"  ✅ DataFrame vacío, no hay nada que subir a '{worksheet_name}'."); return True
+    except Exception as df_err: print(f"  ❌ Error creando DataFrame para '{worksheet_name}': {df_err}"); return False
+    print(f"  Preparando {len(df)} filas para '{worksheet_name}'...")
+    upload_successful_sheet = True; ws = None; start_row_for_data = 1
+    try:
+        try:
+            ws = sheet_handle.worksheet(worksheet_name)
+            print(f"  Hoja '{worksheet_name}' encontrada.")
+            list_of_lists = ws.get_all_values(); current_rows_with_content = len(list_of_lists)
+            start_row_for_data = current_rows_with_content + 1
+            header_exists = False
+            if current_rows_with_content > 0 and list_of_lists[0] == columns_list: header_exists = True; print("  Encabezado detectado.")
+            if not header_exists:
+                print("  Encabezado no detectado/coincide. Escribiendo en Fila 1."); ws.update('A1', [columns_list], value_input_option='USER_ENTERED')
+                print("    Cabecera escrita/actualizada."); start_row_for_data = 2; time.sleep(api_pause / 2 or 0.5)
+            elif start_row_for_data == 1 and not list_of_lists :
+                print("  Hoja vacía. Escribiendo cabecera..."); ws.update('A1', [columns_list], value_input_option='USER_ENTERED')
+                start_row_for_data = 2; time.sleep(api_pause / 2 or 0.5)
+        except gspread.exceptions.WorksheetNotFound:
+            print(f"  Hoja '{worksheet_name}' no encontrada. Creando..."); ws = sheet_handle.add_worksheet(title=worksheet_name, rows=max(len(df) + 100, 200), cols=len(columns_list) + 5)
+            print(f"  Hoja '{worksheet_name}' creada. Escribiendo cabecera..."); ws.update('A1', [columns_list], value_input_option='USER_ENTERED')
+            start_row_for_data = 2; time.sleep(api_pause / 2 or 0.5)
+        except Exception as ws_err: print(f"  ❌ Error fatal obteniendo/creando worksheet '{worksheet_name}': {ws_err}"); return False
+        if not ws: return False
+        num_batches = math.ceil(len(df) / batch_size)
+        print(f"  Subiendo {len(df)} filas en {num_batches} lotes a partir de fila ~{start_row_for_data}...")
+        for i_batch in range(num_batches):
+            batch_start_index = i_batch * batch_size; batch_end_index = min((i_batch + 1) * batch_size, len(df))
+            batch_df = df.iloc[batch_start_index:batch_end_index]; values_to_upload = batch_df.values.tolist()
+            current_gspread_start_row = start_row_for_data + batch_start_index
+            end_col_letter = gspread.utils.rowcol_to_a1(1, len(columns_list)).replace('1',''); full_range_to_update = f"A{current_gspread_start_row}:{end_col_letter}{current_gspread_start_row + len(values_to_upload) - 1}"
+            print(f"    Subiendo Lote {i_batch+1}/{num_batches} ({len(values_to_upload)} filas) a {full_range_to_update}...", end="", flush=True)
+            try:
+                ws.update(full_range_to_update, values_to_upload, value_input_option='USER_ENTERED'); print(" OK."); time.sleep(api_pause)
+            except gspread.exceptions.APIError as api_e:
+                 print(f" ❌ Error API ({api_e.response.status_code}). Mensaje: {str(api_e)[:150]}...")
+                 upload_successful_sheet = False
+                 if api_e.response.status_code == 429: # Rate limit
+                    wait_time = retry_delay_gs * (1 + random.uniform(0.1, 0.5)); print(f"      Límite API. Durmiendo {wait_time:.1f}s y reintentando Lote {i_batch+1}...")
+                    time.sleep(wait_time)
+                    try:
+                         ws.update(full_range_to_update, values_to_upload, value_input_option='USER_ENTERED'); print(f"      Reintento Lote {i_batch+1} OK."); upload_successful_sheet = True; time.sleep(api_pause + 0.5)
+                    except Exception as retry_e: print(f"      ❌ Reintento Lote {i_batch+1} fallido: {retry_e}"); upload_successful_sheet = False; break
+                 else: break # Otro error API, no reintentar este lote
+            except Exception as e_upload: print(f" ❌ Error inesperado Lote {i_batch+1}: {type(e_upload).__name__} - {e_upload}"); upload_successful_sheet = False; break
+    except Exception as e_outer: print(f"  ❌ Error fatal subida para '{worksheet_name}': {e_outer}"); upload_successful_sheet = False
+    if upload_successful_sheet and not df.empty : print(f"  ✅ Subida a '{worksheet_name}' completada ({len(df)} filas).")
+    elif not upload_successful_sheet and not df.empty: print(f"  ❌ Subida a '{worksheet_name}' con errores.")
+    return upload_successful_sheet
+
+# --- BUCLE PRINCIPAL DE PROCESAMIENTO (SIN CAMBIOS IMPORTANTES DE LÓGICA INTERNA) ---
+cols = ["AH_H2H_V","AH_Act","Res_H2H_V","AH_L_H","Res_L_H",
+        "AH_V_A","Res_V_A","AH_H2H_G","Res_H2H_G",
+        "L_vs_UV_A","V_vs_UL_H","Stats_L","Stats_V",
+        "Fin","G_i", "League", "match_id"]
+total_processed_ranges = 0; count_ok, count_skipped, count_not_found, count_load_error, count_parse_error = 0,0,0,0,0
+failed_mids = {'not_found': [], 'load': [], 'parse': []}; ranges_upload_success = {}; global_start_time = time.time()
+main_process = psutil.Process(os.getpid())
+print(f"\n🚀--- Iniciando Proceso CONCURRENTE con {MAX_WORKERS} Workers Selenium ---🚀")
+print(f"    (RAM inicial: {main_process.memory_info().rss / 1024**2:.2f} MB)")
+
+for range_idx, range_info in enumerate(EXTRACTION_RANGES):
+    range_start_time = time.time(); total_processed_ranges += 1
+    start_id, end_id = range_info.get('start_id'), range_info.get('end_id')
+    label = range_info.get('label', f"Rango {range_idx + 1}")
+    if not isinstance(start_id, int) or not isinstance(end_id, int) or start_id < end_id:
+        print(f"\n❌ Error Config Rango '{label}': start({start_id}) >= end({end_id}). Saltando.")
+        ranges_upload_success[label] = {'neg_zero': False, 'pos': False, 'skipped_config': True}; continue
+    print(f"\n{'='*60}\n--- Procesando Rango {range_idx + 1}/{len(EXTRACTION_RANGES)}: '{label}' (IDs: {start_id} a {end_id}) ---\n{'='*60}")
+    rows_neg_zero_range, rows_pos_range = [], []; ids_to_process = list(range(start_id, end_id - 1, -1))
+    total_ids_in_range = len(ids_to_process); processed_count_range = 0
+    print(f"   Rango '{label}': {total_ids_in_range} IDs a procesar con {MAX_WORKERS} workers...")
+    futures = {}; counter_lock = threading.Lock()
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix='SeleniumWorker') as executor:
+        for i, mid_exec in enumerate(ids_to_process): # Añadido índice i para retraso escalonado
+            # Pequeño retraso escalonado para el envío de tareas, si es útil
+            # time.sleep(i * 0.005 * MAX_WORKERS) # Opcional
+            future = executor.submit(worker_task, mid_exec)
+            futures[future] = mid_exec
+            # time.sleep(INTER_ID_SUBMIT_DELAY) # Ya lo tienes, mantenlo si funciona bien
+
+        for future_item in as_completed(futures):
+            processed_count_range += 1; mid_completed = futures[future_item]
+            try:
+                f_mid, status, result_data = future_item.result()
+                with counter_lock:
+                    if status == 'ok':
+                        count_ok += 1; row_data, ah_act_n = result_data
+                        if ah_act_n is None or ah_act_n <= 0: rows_neg_zero_range.append(row_data)
+                        else: rows_pos_range.append(row_data)
+                    elif status == 'skipped': count_skipped += 1
+                    elif status == 'not_found': count_not_found += 1; failed_mids['not_found'].append(mid_completed)
+                    elif status == 'load_error': count_load_error += 1; failed_mids['load'].append(f_mid if isinstance(result_data, tuple) else result_data) # Guardar el error
+                    elif status == 'parse_error': count_parse_error += 1; failed_mids['parse'].append(f_mid if isinstance(result_data, tuple) else result_data) # Guardar el error
+                ok_this_range = len(rows_neg_zero_range) + len(rows_pos_range)
+                fail_skip_this_range = processed_count_range - ok_this_range
+                current_mem_MB = main_process.memory_info().rss / 1024**2
+                print(f"\r  R:{label} {processed_count_range}/{total_ids_in_range} | OK:{ok_this_range} | F/S:{fail_skip_this_range} | Mem:{current_mem_MB:.1f}MB", end="")
+            except Exception as exc_future:
+                 with counter_lock: count_load_error += 1; failed_mids['load'].append(mid_completed)
+                 print(f'\n  [CRITICAL FUTURE ERR] MID {mid_completed} falló: {exc_future}')
+    print(f"\n\n--- Fin Extracción Rango: '{label}' ({(time.time() - range_start_time):.2f}s) ---")
+    print(f"  Resultados OK Rango: {len(rows_neg_zero_range)} (Neg/Cero), {len(rows_pos_range)} (Pos)")
+    final_mem_MB = main_process.memory_info().rss / 1024**2
+    print(f"  RAM Fin Rango: {final_mem_MB:.2f} MB")
+    print(f"\n--- Iniciando Subida para Rango: '{label}' ---"); ul_start_time = time.time()
+    succ_neg = upload_data_to_sheet(NOMBRE_HOJA_NEG_CERO, rows_neg_zero_range, cols, sh, BATCH_SIZE, API_PAUSE, RETRY_DELAY_GSPREAD)
+    succ_pos = upload_data_to_sheet(NOMBRE_HOJA_POSITIVOS, rows_pos_range, cols, sh, BATCH_SIZE, API_PAUSE, RETRY_DELAY_GSPREAD)
+    print(f"--- Fin Subida Rango: '{label}' ({(time.time() - ul_start_time):.2f}s) ---")
+    ranges_upload_success[label] = {'neg_zero': succ_neg, 'pos': succ_pos, 'skipped_config': False}
+    if range_idx < len(EXTRACTION_RANGES) - 1: print(f"\n-- Pausando 5s antes del siguiente rango --"); time.sleep(5)
+
+# --- RESUMEN FINAL (SIN CAMBIOS IMPORTANTES DE LÓGICA INTERNA) ---
+print(f"\n{'='*60}\n--- ✨ Todos los rangos procesados ✨ ---\n{'='*60}")
+print("\nℹ️ Drivers de workers cerrados."); global_end_time = time.time(); total_duration = global_end_time - global_start_time
+print("\n--- 📊 Resumen General Detallado ---"); print(f"⏱️ Tiempo Total: {total_duration:.2f}s")
+print(f"⚙️ Config: {len(EXTRACTION_RANGES)} rangos, Workers={MAX_WORKERS}, Timeout={SELENIUM_TIMEOUT}s")
+print(f"\n✔️ Total OK (Global): {count_ok}"); print(f"\n⚠️ Problemas Extracción (Global):")
+print(f"  - Saltados (AH='?'): {count_skipped}"); print(f"  - No Encontrados: {count_not_found}")
+print(f"  - Errores Carga: {count_load_error}"); print(f"  - Errores Parseo: {count_parse_error}")
+total_fallos_val = count_not_found + count_load_error + count_parse_error; print(f"  ➡️ Total Fallos/No Encontrados: {total_fallos_val}")
+# Opcional: Imprimir IDs con fallo
+# for err_type, id_list in failed_mids.items():
+#     if id_list: print(f"  - {err_type.capitalize()} ({len(id_list)}): {str(id_list[:10]) + ('...' if len(id_list)>10 else '')}")
+print("\n✅/❌ Subida por rango:"); overall_up_success = True
+for lbl, stat in ranges_upload_success.items():
+    if stat.get('skipped_config', False): print(f"  - Rango '{lbl}': ⚠️ Saltado (Config)"); overall_up_success = False
+    else:
+        neg_ok_val, pos_ok_val = stat.get('neg_zero', False), stat.get('pos', False); stat_str = "❓"
+        if neg_ok_val and pos_ok_val: stat_str = "✅ OK Ambas"
+        elif neg_ok_val and not pos_ok_val: stat_str = "⚠️ Fallo Positivos"; overall_up_success = False
+        elif not neg_ok_val and pos_ok_val: stat_str = "⚠️ Fallo Neg/Cero"; overall_up_success = False
+        else: stat_str = "❌ Fallo Ambas"; overall_up_success = False
+        print(f"  - Rango '{lbl}': [{stat_str}]")
+print(f"\n{'='*60}")
+if overall_up_success and total_fallos_val == 0 and count_skipped == 0: print("\n🎉🎉 ¡Proceso aparentemente OK! Revisa hojas.")
+elif overall_up_success and (total_fallos_val > 0 or count_skipped > 0): print("\n⚠️ Proceso completado (Subidas OK), PERO hubo saltos o fallos.")
+else: print("\n❌❌ Proceso CON ERRORES en extracción Y/O subida.")
+print(f"{'='*60}"); final_mem_global_MB = psutil.Process(os.getpid()).memory_info().rss / 1024**2
+print(f"RAM Final Proceso Principal: {final_mem_global_MB:.2f} MB")
+
+# === FIN DEL CÓDIGO PRINCIPAL ===
